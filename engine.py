@@ -366,7 +366,8 @@ def build_profile(shots: list, final_names: dict, profile: int) -> ProfileBuild:
 # ---------------------------------------------------------------------------
 HEADER_CELLS = {"LID": "B2", "AID": "E2", "AID Name": "H2", "Dig No.": "B3",
                 "Pipe OD (in)": "B4", "Pipe WT (in)": "E4", "SMYS (psi)": "H4",
-                "Exposed Length (ft)": "L4", "Profile No.": "P1"}
+                "Exposed Length (ft)": "L4", "Profile No.": "P1",
+                "Technician Name": "L3"}
 
 
 @dataclass
@@ -471,7 +472,8 @@ def order_stations(build: ProfileBuild, movement: Optional[Workbook]) -> tuple:
     return ordered + extra, missing, extra
 
 
-def fill_consistency(book: Workbook, stations: list, exposed_length: Optional[float]) -> bytes:
+def fill_consistency(book: Workbook, stations: list, exposed_length: Optional[float],
+                     technician: Optional[str] = None) -> bytes:
     p = XlsxPatcher(book.data)
     values, cached = {}, {}
     for i in range(MAX_STATIONS):
@@ -497,6 +499,8 @@ def fill_consistency(book: Workbook, stations: list, exposed_length: Optional[fl
         cached.update({f"{c}{r}": v for c, v in cache.items()})
     if exposed_length is not None and book.header["Exposed Length (ft)"] in (None, "", "xx"):
         values["L4"] = exposed_length
+    if technician:
+        values["L3"] = technician
     missing = p.set_values(CONSISTENCY_SHEET, values)
     if missing:
         raise ValueError("Could not place cells: " + ", ".join(missing[:10]))
@@ -506,7 +510,7 @@ def fill_consistency(book: Workbook, stations: list, exposed_length: Optional[fl
 
 
 def fill_movement(book: Workbook, profile: int, stations: list, missing: list,
-                  exposed_length: Optional[float]) -> bytes:
+                  exposed_length: Optional[float], technician: Optional[str] = None) -> bytes:
     """Write this profile's averages into its block, rows aligned by station ID."""
     p = XlsxPatcher(book.data)
     start = 2 + 6 * profile                          # B for Profile 0, H for 1, N for 2, T for 3
@@ -531,6 +535,8 @@ def fill_movement(book: Workbook, profile: int, stations: list, missing: list,
         values.update({f"{c}{r}": v for c, v in zip(cols, block)})
     if exposed_length is not None and book.header["Exposed Length (ft)"] in (None, "", "xx"):
         values["L4"] = exposed_length
+    if technician:
+        values["L3"] = technician
     missing_cells = p.set_values(MOVEMENT_SHEET, values)
     if missing_cells:
         raise ValueError("Could not place cells: " + ", ".join(missing_cells[:10]))

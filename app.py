@@ -117,6 +117,12 @@ for p in in_csv:
 if not profiles:
     st.stop()
 
+on_file = next((str(b.header["Technician Name"]).strip() for _, b in books.values()
+                if b.header["Technician Name"] not in (None, "", "xx")), "")
+technician = st.text_input("Technician name", value=on_file, key="technician",
+                           help="Written to Technician Name on every workbook in this run. "
+                                "Leave blank to keep what each file already has.").strip()
+
 # ---- per-profile entry ----------------------------------------------------------
 results = {}
 tabs = st.tabs([f"Profile {p}" for p in profiles])
@@ -280,10 +286,12 @@ for p in profiles:
     stations, missing, extra = engine.order_stations(r["build"], current_mv)
     try:
         outputs[r["cc_name"].name] = engine.fill_consistency(r["cc"], stations,
-                                                             r["build"].exposed_length)
+                                                             r["build"].exposed_length,
+                                                             technician or None)
         if current_mv is not None:
             mv_bytes = engine.fill_movement(current_mv, p, [s for s in stations if s not in extra],
-                                            missing, r["build"].exposed_length)
+                                            missing, r["build"].exposed_length,
+                                            technician or None)
     except Exception as exc:
         notes.append(("error", f"Profile {p}: couldn't write the workbooks: {exc}"))
         continue
