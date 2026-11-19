@@ -98,3 +98,29 @@ def test_west_positive_flips_y_only():
     n, e, z = st.average
     st.west_positive = True
     assert st.average == (n, -e, z)
+
+
+def test_bare_weld_name_and_order_by_shot_number():
+    assert engine.canonical_station("gw 3967000")[0] == "GW 3967000"
+    assert engine.canonical_station("3' gw 500") is None
+    # station skipped in pass 1 and shot later with its reserved number
+    rows = [HEADER, "BM,0,0,0"]
+    order = [1, 2, 4, 3, 5, 6, 7, 9, 8, 10]          # file order of shot numbers
+    labels = {1: "3' us gw 500", 2: "gw 500", 3: "3' ds gw 500", 4: "6' ds gw 500",
+              5: "9' ds gw 500"}
+    dist = {1: -3, 2: 0, 3: 3, 4: 6, 5: 9}
+    for c in order:
+        k = c if c <= 5 else c - 5
+        rows.append(f"{labels[k]} {c:04d},{10 + dist[k] + 0.003 * (c > 5):.3f},-20,-1")
+    parsed = engine.parse_trimble_csv("\n".join(rows).encode())
+    engine.review_names(parsed.shots)
+    build = engine.build_profile(parsed.shots, {s.index: s.suggestion for s in parsed.shots}, 0)
+    assert not build.errors and not build.warnings
+    assert [s.station_id for s in build.stations] == [
+        "3' U/S GW 500", "GW 500", "3' D/S GW 500", "6' D/S GW 500", "9' D/S GW 500"]
+    assert [x.counter for x in build.stations[2].shots] == [3, 8]
+
+
+def test_question_mark_coordinates_explained():
+    parsed = engine.parse_trimble_csv(HEADER.encode() + b"\nbs2,?,?,?,\n3' us gw 1 0001,?,?,?,\n")
+    assert parsed.errors and "backsight azimuth" in parsed.errors[0]

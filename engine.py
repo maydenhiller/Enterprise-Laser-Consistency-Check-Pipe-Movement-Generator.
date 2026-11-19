@@ -30,7 +30,7 @@ from xlsx_patch import XlsxPatcher, column_letters
 
 # Bump whenever parsing or the Workbook/ParsedFile shape changes: the app passes it into
 # its cached loaders so Streamlit never serves objects built by older code.
-ENGINE_VERSION = 2
+ENGINE_VERSION = 4
 
 CONSISTENCY_SHEET = "Robotic Raw Data Input"
 MOVEMENT_SHEET = "Robotic Raw Data Average Input"
@@ -42,7 +42,7 @@ ALLOWED_UNITS = ("USSURVEYFEET",)
 
 NAME_RE = re.compile(r"^(?P<station>.*?)\s+(?P<counter>\d{4})$")
 STATION_RE = re.compile(
-    r"^(?:(?P<dist>\d+(?:\.\d+)?)\s*'+\s*)?(?P<dir>[UD])\s*/?\s*S\s+(?:OF\s+)?GW\s*#?\s*(?P<gw>\d+)$",
+    r"^(?:(?P<dist>\d+(?:\.\d+)?)\s*'+\s*)?(?:(?P<dir>[UD])\s*/?\s*S\s+(?:OF\s+)?)?GW\s*#?\s*(?P<gw>\d+)$",
     re.I)
 CONTROL_RE = re.compile(r"\b(BM|BS|BENCH\s*MARK|BACK\s*SIGHT|CHECK)\b", re.I)
 
@@ -92,10 +92,12 @@ def canonical_station(text: str):
     m = STATION_RE.match(cleaned)
     if not m:
         return None
-    side = m.group("dir").upper()
+    side = m.group("dir").upper() if m.group("dir") else None
     gw = str(int(m.group("gw")))
     dist = float(m.group("dist")) if m.group("dist") else None
-    label = f"{side}/S GW {gw}"
+    if dist and side is None:
+        return None                              # "3' GW 500": footage without a side
+    label = f"{side}/S GW {gw}" if side else f"GW {gw}"
     if dist:
         d = int(dist) if dist.is_integer() else dist
         label = f"{d}' {label}"
@@ -125,7 +127,7 @@ def parse_trimble_csv(data: bytes) -> ParsedFile:
     Also accepts the hand-sorted layout (Name, Station ID, Measurement ID, N, E, Elev).
     """
     text = data.decode("utf-8-sig", errors="replace")
-    errors, warnings, shots, control = [], [], [], []
+    errors, warnings, shots, control, null_points = [], [], [], [], []
     units = None
     for row in csv.reader(io.StringIO(text)):
         row = [c.strip() for c in row]
@@ -140,6 +142,9 @@ def parse_trimble_csv(data: bytes) -> ParsedFile:
         coords = [_float(c) for c in row[1:4]]
         if None in coords and len(row) >= 6:
             coords = [_float(c) for c in row[3:6]]
+        if any(str(c).strip() == "?" for c in row[1:4]):
+            null_points.append(name)
+            continue
         if None in coords or not name:
             warnings.append(f"Skipped a line that isn't a point: {joined[:60]}")
             continue
@@ -153,7 +158,15 @@ def parse_trimble_csv(data: bytes) -> ParsedFile:
         errors.append(f"Job units are '{units}'. Jobs must be US Survey Feet.")
     if units is None:
         warnings.append("No 'Units:' header line found - assuming US Survey Feet.")
-    if not shots:
+    if null_points:
+        errors.append(
+            f"{len(null_points)} point(s) have no coordinates ('?' in the export), starting with "
+            f"'{null_points[0]}'. Trimble couldn't compute them: the station setup has no "
+            "backsight azimuth, so nothing measured from it has a position. In Trimble Access, "
+            "open Review job, find that station setup's backsight azimuth record, enter the "
+            "azimuth (0), then export again - the angles and distances are still stored and "
+            "every point recomputes.")
+    if not shots and not null_points:
         errors.append("No pipe shots found in the CSV.")
     return ParsedFile(shots, control, units, errors, warnings)
 
@@ -346,6 +359,11 @@ def build_profile(shots: list, final_names: dict, profile: int) -> ProfileBuild:
             continue
         s.counter = counter
         groups.setdefault(station, []).append(s)
+    # Order by shot number, not by position in the file: a station skipped and shot later
+    # (with its reserved number) must still land in its place along the pipe.
+    for members in groups.values():
+        members.sort(key=lambda x: x.counter)
+    groups = dict(sorted(groups.items(), key=lambda kv: kv[1][0].counter))
     stations = [Station(k, v) for k, v in groups.items()]
     for st in stations:
         if len(st.shots) == 1:
@@ -357,6 +375,16 @@ def build_profile(shots: list, final_names: dict, profile: int) -> ProfileBuild:
         if spread > 0.5:
             errors.append(f"{st.station_id}: shots under this name are {spread:.2f} ft apart - "
                           "one of them is mislabeled.")
+    if len(stations) >= 3:
+        first, last = stations[0].shots[0].xyz, stations[-1].shots[0].xyz
+        axis = [b - a for a, b in zip(first, last)]
+        along = [sum((p - a) * u for p, a, u in zip(st.shots[0].xyz, first, axis))
+                 for st in stations]
+        backwards = [stations[i + 1].station_id for i in range(len(along) - 1)
+                     if along[i + 1] < along[i] - 0.1 * abs(along[-1] or 1) / len(along)]
+        if backwards:
+            warnings.append("Stations out of order along the pipe (by shot number): "
+                            + ", ".join(backwards[:5]) + ". Check those shot numbers.")
     if len(stations) > MAX_STATIONS:
         errors.append(f"{len(stations)} stations - the template holds {MAX_STATIONS}. "
                       "Use wider spacing (Enterprise allows up to 3 ft on straight pipe over 18 ft).")
