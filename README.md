@@ -11,19 +11,27 @@ This app fills only the measurement area, plus Exposed Length when it's blank.
 ## One profile per run
 1. Upload the Trimble CSV, the Consistency Check for this profile, and the Pipe Movement
    workbook. At Profile 1 and 2, upload the Pipe Movement file the app gave you last time.
-2. **Shot names**: shots that sit on the same spot of pipe are grouped by coordinates.
-   Mislabeled names are flagged with a suggested fix, for example a missing shot number,
-   a GW typo, footage that doesn't match the distance from the weld station, a label that
-   wasn't changed, or `''`. The tech confirms or edits each one.
-3. **Notes and thickness**: typed for every station. You get a warning if every station has
-   the same thickness. `no BS` in a station's notes leaves it out of the bending strain
-   (that's the workbook's own rule).
-4. **Consistency**: the 3D difference between measurements (#2 vs #1, #3 vs #1) for each
-   station, against Enterprise's 0.20" limit, and a chart of the differences. You also get
-   an on-site preview of max deflection and fitted curvature strain, using the same chord
-   projection and 4th-order fit as the hidden Profile sheet. Failures show a warning; you
-   can tick a box to continue without a 3rd measurement.
-5. **Download**: both workbooks come back with the same file names they were uploaded with.
+2. **Download right away.** Both workbooks are filled the moment the files are uploaded, and
+   they come back with the same file names. The box at the top lists anything to check.
+3. **What's on the pipe**: set what most of the pipe has (Coating, Bare pipe or Sleeve, the
+   type, and the total thickness), then change any station that differs in the table.
+   - Bare pipe writes 0.
+   - The weld station gets "GW" added to its notes automatically.
+   - `no BS` in Other notes leaves that station out of the bending strain (that's the
+     workbook's own rule).
+   - Both shots at a station share one entry, because the workbook copies measurement #1's
+     notes and thickness to #2 and #3.
+   - If thickness is left blank, a warning shows and the workbook treats it as 0.
+
+   The downloads update with every change.
+4. **Shot names are corrected automatically.** Shots that sit on the same spot of pipe are
+   grouped by coordinates, and a bad name takes the name of the other shot at that spot.
+   That covers a missing shot number, a GW typo, a label that wasn't changed, or `''`. Every
+   fix is listed under Shot names and can be overridden there.
+5. **Consistency**: for each station, the 3D difference between measurements against
+   Enterprise's 0.20" limit, plus a chart. There's also an on-site preview of max deflection
+   and fitted strain, using the same math as the hidden Profile sheet. Failures are warned,
+   but they don't block the download.
 
 ## Rules the app follows
 - **Shot order is kept.** Rows are written in the order the stations were shot. For Profile
