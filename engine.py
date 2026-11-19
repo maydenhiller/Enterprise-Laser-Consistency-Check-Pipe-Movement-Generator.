@@ -30,7 +30,7 @@ from xlsx_patch import XlsxPatcher, column_letters
 
 # Bump whenever parsing or the Workbook/ParsedFile shape changes: the app passes it into
 # its cached loaders so Streamlit never serves objects built by older code.
-ENGINE_VERSION = 5
+ENGINE_VERSION = 8
 
 CONSISTENCY_SHEET = "Robotic Raw Data Input"
 MOVEMENT_SHEET = "Robotic Raw Data Average Input"
@@ -240,19 +240,51 @@ def review_names(shots: list) -> list:
         clusters = {}
         for s in group:
             clusters.setdefault(s.cluster, []).append(s)
-        names = {}
-        for cid, members in clusters.items():
-            votes = Counter(m.station for m in members if m.station and
-                            not (top_gw and m.gw != top_gw and gw_counts[m.gw] <= 2 and top_count >= 5))
-            names[cid] = votes.most_common(1)[0][0] if votes else None
+        # Name each spot from the labels of the shots taken there. Clear majorities first;
+        # ties (one mislabeled shot at a 2-shot spot) are settled by geometry: the label
+        # whose footage matches the measured distance from the weld station wins, and a
+        # name another spot already owns loses.
+        def centre(cid):
+            pts = [m.xyz for m in clusters[cid]]
+            return tuple(sum(c) / len(pts) for c in zip(*pts))
 
-        # Label distance vs geometry, measured from each weld's own station.
+        votes = {}
+        for cid, members in clusters.items():
+            votes[cid] = Counter(m.station for m in members if m.station and
+                                 not (top_gw and m.gw != top_gw and gw_counts[m.gw] <= 2
+                                      and top_count >= 5))
+        names, ties = {}, []
+        for cid, v in votes.items():
+            ranked = v.most_common()
+            if not ranked:
+                names[cid] = None
+            elif len(ranked) == 1 or ranked[0][1] > ranked[1][1]:
+                names[cid] = ranked[0][0]
+            else:
+                ties.append(cid)
+
         weld_spot = {}
         for cid, name in names.items():
             if name and "'" not in name:
-                gw = name.split()[-1]
-                pts = [m.xyz for m in clusters[cid]]
-                weld_spot[gw] = tuple(sum(c) / len(pts) for c in zip(*pts))
+                weld_spot[name.split()[-1]] = centre(cid)
+
+        def misfit(name, cid):
+            found = canonical_station(name)
+            if not found or found[1] not in weld_spot:
+                return 0.0
+            return abs(math.dist(centre(cid), weld_spot[found[1]]) - (found[2] or 0.0))
+
+        owned = Counter(n for n in names.values() if n)
+        for cid in ties:
+            top = votes[cid].most_common(1)[0][1]
+            options = [n for n, c in votes[cid].items() if c == top]
+            options.sort(key=lambda n: (owned[n] > 0, misfit(n, cid),
+                                        min(m.counter or 9999 for m in clusters[cid]
+                                            if m.station == n)))
+            names[cid] = options[0]
+            owned[options[0]] += 1
+            if "'" not in options[0]:
+                weld_spot.setdefault(options[0].split()[-1], centre(cid))
 
         for s in group:
             name = names[s.cluster]
@@ -345,11 +377,14 @@ class ProfileBuild:
         return round(math.dist(self.stations[0].average, self.stations[-1].average), 2)
 
 
-def build_profile(shots: list, final_names: dict, profile: int) -> ProfileBuild:
+def build_profile(shots: list, final_names: dict, profile: int,
+                  order: Optional[list] = None) -> ProfileBuild:
     """Group the profile's shots by their confirmed names (shot index -> name)."""
     errors, warnings, groups = [], [], {}
     for s in shots:
         name = final_names.get(s.index, s.raw_name)
+        if name is None:                     # left out on purpose
+            continue
         station, counter, *_ = parse_name(name)
         if station is None or counter is None:
             if s.profile == profile:
@@ -364,6 +399,9 @@ def build_profile(shots: list, final_names: dict, profile: int) -> ProfileBuild:
     for members in groups.values():
         members.sort(key=lambda x: x.counter)
     groups = dict(sorted(groups.items(), key=lambda kv: kv[1][0].counter))
+    if order:                                # position mode: stations in pipe order
+        rank = {name: i for i, name in enumerate(order)}
+        groups = dict(sorted(groups.items(), key=lambda kv: rank.get(kv[0], len(rank))))
     stations = [Station(k, v) for k, v in groups.items()]
     for st in stations:
         if len(st.shots) == 1:
@@ -659,3 +697,124 @@ def detect_west_positive(book: Optional[Workbook], stations: list) -> Optional[b
     if same == flipped == 0:
         return None
     return flipped > same
+
+
+
+# ---------------------------------------------------------------------------
+# Naming by measured position (when the field labels are off in a pattern)
+# ---------------------------------------------------------------------------
+@dataclass
+class Spot:
+    along: float          # ft from the GW spot, + downstream
+    shots: list
+    name: str = ""
+    used: list = field(default_factory=list)
+    dropped: list = field(default_factory=list)   # (shot, reason)
+
+
+def position_layout(shots: list, profile: int, shift: float = 0.0):
+    """Group a profile's shots by where they were taken and name each spot by its measured
+    distance from the weld. The weld is the spot most shots labeled 'GW' (no footage) sit
+    on, moved ``shift`` ft downstream if the GW shots weren't on the weld. Downstream is the
+    side most 'D/S' labels are on. Returns (spots in pipe order, weld GW number, notes)."""
+    group = [s for s in shots if s.profile == profile]
+    if not group:
+        return [], None, []
+    # Group by horizontal position only, so a shot with the wrong target height still
+    # lands with the other shots at its spot (and is then dropped for its elevation).
+    spots, plan = {}, []
+    for s in sorted(group, key=lambda x: x.counter or 9999):
+        for k, (n, e, members) in enumerate(plan):
+            if math.hypot(s.n - n, s.e - e) <= 0.35:
+                members.append(s)
+                plan[k] = (sum(x.n for x in members) / len(members),
+                           sum(x.e for x in members) / len(members), members)
+                break
+        else:
+            plan.append((s.n, s.e, [s]))
+    spots = {k: members for k, (_, _, members) in enumerate(plan)}
+    centres = {k: tuple(sum(c) / len(v) for c in zip(*[x.xyz for x in v])) for k, v in spots.items()}
+    keys = list(centres)
+    a, b = max(((i, j) for i in keys for j in keys),
+               key=lambda p: math.dist(centres[p[0]][:2], centres[p[1]][:2]))
+    axis = [q - p for p, q in zip(centres[a][:2], centres[b][:2])]
+    length = math.hypot(*axis) or 1.0
+    axis = [x / length for x in axis]
+
+    def along(k):
+        return sum((c - o) * u for c, o, u in zip(centres[k][:2], centres[a][:2], axis))
+
+    gw_votes = Counter(k for k, v in spots.items() for x in v if x.gw and x.dist is None)
+    gw_number = Counter(x.gw for x in group if x.gw).most_common(1)
+    gw_number = gw_number[0][0] if gw_number else "?"
+    notes = []
+    if gw_votes:
+        origin = gw_votes.most_common(1)[0][0]
+    else:
+        origin = min(keys, key=lambda k: min(x.counter or 9999 for x in spots[k]))
+        notes.append("No shot is labeled as the weld; measuring from the first spot shot.")
+    d_side = sum(1 if along(k) > along(origin) else -1
+                 for k, v in spots.items() for x in v if x.side == "D")
+    sign = 1 if d_side >= 0 else -1
+
+    out = []
+    for k, members in spots.items():
+        pos = sign * (along(k) - along(origin)) - shift
+        feet = round(pos)
+        if abs(pos) < 0.5:
+            name = f"GW {gw_number}"
+        else:
+            name = f"{abs(feet)}' {'D' if pos > 0 else 'U'}/S GW {gw_number}"
+        spot = Spot(pos, sorted(members, key=lambda x: x.counter or 9999), name)
+        zs = sorted(x.z for x in members)
+        mid = zs[len(zs) // 2]
+        for x in spot.shots:
+            if len(members) > 1 and abs(x.z - mid) > 0.25:
+                spot.dropped.append((x, f"elevation {x.z - mid:+.2f} ft off the other shots "
+                                        "here - wrong target height?"))
+            else:
+                spot.used.append(x)
+        while len(spot.used) > 3:
+            extra = spot.used.pop()
+            spot.dropped.append((extra, "more than 3 shots at this spot"))
+        out.append(spot)
+    out.sort(key=lambda sp: sp.along)
+    if not any(sp.name.startswith("GW") for sp in out):
+        notes.append("No shot sits on the weld itself, so there is no GW station.")
+    gaps = [f"{(p.along + q.along) / 2:.1f}" for p, q in zip(out, out[1:])
+            if q.along - p.along > 1.5 * median([y.along - x.along for x, y in zip(out, out[1:])])]
+    if gaps:
+        notes.append("No shots at about " + ", ".join(gaps) + " ft from the weld - marks "
+                     "that were skipped in every pass.")
+    return out, gw_number, notes
+
+
+def position_names(spots: list) -> dict:
+    """{shot index: new name, or None to leave the shot out}."""
+    names = {}
+    for sp in spots:
+        for x in sp.used:
+            names[x.index] = f"{sp.name} {x.counter:04d}"
+        for x, _ in sp.dropped:
+            names[x.index] = None
+    return names
+
+
+def label_mismatch_share(spots: list) -> float:
+    """Share of footage-labeled shots whose label disagrees with their measured spot."""
+    total = bad = 0
+    for sp in spots:
+        for x in sp.used + [d for d, _ in sp.dropped]:
+            if x.station:
+                total += 1
+                bad += x.station != sp.name
+    return bad / total if total else 0.0
+
+
+def pipe_order(spots: list) -> list:
+    """Spot names along the pipe, starting from the end the first shot was taken at."""
+    names = [sp.name for sp in spots if sp.used]
+    first = min((sp for sp in spots if sp.used), key=lambda sp: min(x.counter for x in sp.used))
+    if abs(first.along - spots[-1].along) < abs(first.along - spots[0].along):
+        names.reverse()
+    return names

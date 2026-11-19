@@ -133,24 +133,63 @@ for p, tab in zip(profiles, tabs):
         shots = [s for s in parsed.shots if s.profile == p]
         final = {s.index: s.suggestion for s in shots}
 
-        # Name fixes, applied automatically and overridable.
-        fix_rows = [{"#": s.index + 1, "Raw name": s.raw_name, "Used as": s.suggestion,
-                     "Why": "; ".join(s.flags) or "Formatting cleaned up", "_i": s.index}
-                    for s in shots if s.flags or s.suggestion != s.raw_name]
-        with st.expander(f"Shot names - {len(fix_rows)} corrected automatically",
-                         expanded=False):
-            if fix_rows:
-                st.write("Each bad name took the name of the other shot(s) at the same spot. "
-                         "Change 'Used as' if one is wrong.")
-                fixes = st.data_editor(pd.DataFrame(fix_rows), hide_index=True, width="stretch",
-                                       key=f"fixes_{p}", disabled=["#", "Raw name", "Why"],
-                                       column_config={"_i": None, "Why": st.column_config
-                                                      .TextColumn(width="large")})
-                final.update(dict(zip(fixes["_i"], fixes["Used as"])))
-            else:
-                st.write("All shot names read cleanly.")
+        # Two ways to name stations: the field labels (with obvious typos fixed), or the
+        # measured position when the labels are off in a pattern. Position is picked
+        # automatically when the labels can't produce a clean result.
+        label_build = engine.build_profile(parsed.shots, final, p)
+        order = None
+        modes = ["Field labels (typos fixed)", "Measured position"]
+        mode = st.radio("Name stations by", modes, horizontal=True, key=f"mode_{p}",
+                        index=1 if label_build.errors else 0,
+                        help="Measured position names every station by its distance from "
+                             "the weld, from the robot's coordinates.")
+        if mode == modes[1]:
+            if label_build.errors:
+                st.warning("The field labels don't match where the shots were taken (for "
+                           "example two spots 3 ft apart with the same label), so stations are "
+                           "named by measured position. Check the table below.")
+            shift = st.number_input(
+                "Weld offset (ft): how far downstream of the shots labeled 'GW' the weld "
+                "really is", value=0.0, step=0.5, format="%.2f", key=f"shift_{p}",
+                help="0 if the GW shots were taken on the weld. If they were taken one mark "
+                     "upstream of it, enter the mark spacing.")
+            spots, gw_number, layout_notes = engine.position_layout(parsed.shots, p, shift)
+            for n in layout_notes:
+                st.caption(n)
+            final = engine.position_names(spots)
+            order = engine.pipe_order(spots)
+            st.dataframe(pd.DataFrame([{
+                "Distance from weld (ft)": round(sp.along, 2),
+                "Station": sp.name,
+                "Shots used": ", ".join(f"{x.counter:04d}" for x in sp.used),
+                "Field labels": ", ".join(sorted({x.raw_name.rsplit(" ", 1)[0]
+                                                  for x in sp.used + [d for d, _ in sp.dropped]})),
+                "Left out": "; ".join(f"{x.counter:04d} ({why})" for x, why in sp.dropped),
+            } for sp in spots]), hide_index=True, width="stretch")
+            fix_rows = [{"#": s.index + 1, "Raw name": s.raw_name,
+                         "Used as": final.get(s.index) or "(left out)"}
+                        for s in shots if final.get(s.index) != s.raw_name]
+            renamed = True
+        else:
+            renamed = False
+            fix_rows = [{"#": s.index + 1, "Raw name": s.raw_name, "Used as": s.suggestion,
+                         "Why": "; ".join(s.flags) or "Formatting cleaned up", "_i": s.index}
+                        for s in shots if s.flags or s.suggestion != s.raw_name]
+            with st.expander(f"Shot names - {len(fix_rows)} corrected automatically",
+                             expanded=False):
+                if fix_rows:
+                    st.write("Each bad name took the name of the other shot(s) at the same "
+                             "spot. Change 'Used as' if one is wrong.")
+                    fixes = st.data_editor(pd.DataFrame(fix_rows), hide_index=True,
+                                           width="stretch", key=f"fixes_{p}",
+                                           disabled=["#", "Raw name", "Why"],
+                                           column_config={"_i": None, "Why": st.column_config
+                                                          .TextColumn(width="large")})
+                    final.update(dict(zip(fixes["_i"], fixes["Used as"])))
+                else:
+                    st.write("All shot names read cleanly.")
 
-        build = engine.build_profile(parsed.shots, final, p)
+        build = engine.build_profile(parsed.shots, final, p, order)
         if build.errors:
             for e in build.errors:
                 st.error(e)
@@ -263,7 +302,8 @@ for p, tab in zip(profiles, tabs):
                        f"{pv['max_deflection_in']:.2f} in, fitted strain (average) "
                        f"{pv.get('max_fitted_strain', 0):.6f}. The workbook is the record.")
         results[p] = {"cc_name": cc_name, "cc": cc, "build": build, "fails": fails,
-                      "no_thick": no_thick, "fixed": len(fix_rows), "tech": tech}
+                      "no_thick": no_thick, "fixed": len(fix_rows), "tech": tech,
+                      "by_position": renamed}
 
 
 download_box = st.container(border=True)   # below the profile tabs
@@ -303,7 +343,10 @@ for p in profiles:
     except Exception as exc:
         notes.append(("error", f"Profile {p}: couldn't write the workbooks: {exc}"))
         continue
-    if r["fixed"]:
+    if r.get("by_position"):
+        notes.append(("warning", f"Profile {p}: stations named by measured position, not the "
+                                 "field labels - check the station table on its tab."))
+    elif r["fixed"]:
         notes.append(("info", f"Profile {p}: {r['fixed']} shot name(s) auto-corrected "
                               "(see Shot names on its tab)."))
     if r["no_thick"]:

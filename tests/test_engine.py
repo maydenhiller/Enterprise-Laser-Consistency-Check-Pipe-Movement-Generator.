@@ -131,3 +131,51 @@ def test_numbered_benchmark_and_backsight_are_control():
             "\ndig 19a bm2 11.19.26,0,0,0\n3' us gw 1 0001,10,-20,-1\n").encode()
     parsed = engine.parse_trimble_csv(data)
     assert len(parsed.control) == 3 and len(parsed.shots) == 1
+
+
+def test_one_station_off_label_is_resolved_by_geometry():
+    """Pass 2 shot at the 30' mark labeled 27' (the dig 19A pattern): the 30' spot has
+    one '30'' and one '27'' shot. The fix must name it 30', not split 27' across spots."""
+    rows = [HEADER, "bm,0,0,0"]
+    feet = [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36]
+    def name(f):
+        return f"{f}' ds gw 500" if f else "gw 500"
+    c = 1
+    # pass 2 is written first in the file, so a file-order tie-break would pick the bad label
+    for f in feet:
+        label = name(27) if f == 30 else name(f)
+        rows.append(f"{label} {c + len(feet):04d},{10 + f + 0.004:.3f},-20,-1")
+        c += 1
+    c = 1
+    for f in feet:
+        rows.append(f"{name(f)} {c:04d},{10 + f:.3f},-20,-1")
+        c += 1
+    parsed = engine.parse_trimble_csv("\n".join(rows).encode())
+    engine.review_names(parsed.shots)
+    bad = next(s for s in parsed.shots if s.counter == 11 + len(feet))
+    assert bad.suggestion.startswith("30' D/S GW 500")
+    build = engine.build_profile(parsed.shots, {s.index: s.suggestion for s in parsed.shots}, 0)
+    assert not build.errors, build.errors
+    assert all(len(st.shots) == 2 for st in build.stations)
+
+
+def test_position_mode_drops_wrong_height_and_keeps_pipe_order():
+    rows = [HEADER, "bm,0,0,0"]
+    feet = [-3, 0, 3, 6, 9, 12]
+    labels = ["3' us gw 7", "gw 7", "3' ds gw 7", "6' ds gw 7", "9' ds gw 7", "12' ds gw 7"]
+    c = 1
+    for p in range(2):                     # labels shifted one mark in pass 2
+        for i, f in enumerate(feet):
+            z = -1 - (5.0 if (p, i) == (0, 1) else 0)          # one shot at the 5 ft rod height
+            lab = labels[min(i + p, len(labels) - 1)] if i >= 3 else labels[i]
+            rows.append(f"{lab} {c:04d},{20 + f + 0.002 * p:.3f},-30,{z:.3f}")
+            c += 1
+    parsed = engine.parse_trimble_csv("\n".join(rows).encode())
+    engine.review_names(parsed.shots)
+    spots, gw, notes = engine.position_layout(parsed.shots, 0)
+    names = engine.position_names(spots)
+    assert names[1] is None                                  # wrong-height shot left out
+    build = engine.build_profile(parsed.shots, names, 0, engine.pipe_order(spots))
+    assert not build.errors
+    assert [s.station_id for s in build.stations] == [
+        "3' U/S GW 7", "GW 7", "3' D/S GW 7", "6' D/S GW 7", "9' D/S GW 7", "12' D/S GW 7"]
