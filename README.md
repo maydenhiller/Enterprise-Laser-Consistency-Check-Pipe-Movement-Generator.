@@ -8,30 +8,37 @@ Headers (LID, AID, line name, dig #, OD, WT, SMYS) come from the
 [Enterprise Dig File Generator](https://github.com/maydenhiller/Enterprise-Dig-File-Generator).
 This app fills only the measurement area, plus Exposed Length when it's blank.
 
-## One profile per run
-1. Upload the Trimble CSV, the Consistency Check for this profile, and the Pipe Movement
-   workbook. At Profile 1 and 2, upload the Pipe Movement file the app gave you last time.
-2. **Download right away.** Both workbooks are filled the moment the files are uploaded, and
-   they come back with the same file names. The box at the top lists anything to check.
-3. **What's on the pipe**: set what most of the pipe has (Coating, Bare pipe or Sleeve, the
-   type, and the total thickness), then change any station that differs in the table.
-   - Bare pipe writes 0.
-   - The weld station gets "GW" added to its notes automatically.
-   - `no BS` in Other notes leaves that station out of the bending strain (that's the
-     workbook's own rule).
-   - Both shots at a station share one entry, because the workbook copies measurement #1's
-     notes and thickness to #2 and #3.
-   - If thickness is left blank, a warning shows and the workbook treats it as 0.
+## One dig per run
+1. Upload the Trimble CSV export(s), one or more Consistency Checks (Profile 0, 1, 2 -
+   whichever you have shots for) and the Pipe Movement workbook. Several CSVs are fine; a
+   shot that's in more than one export (jobs are cumulative) is used once. Each Consistency
+   Check is matched to its profile by its Profile No. cell.
+2. **Download right away.** Every workbook is filled on upload and comes back with the same
+   name, plus a zip of all of them. Profiles are written into the Pipe Movement file in
+   order (0, then 1, then 2), with rows matched by station.
+3. **Each profile tab** asks what's on the pipe: one choice for most of the pipe, then
+   per-station changes. Choices match the As-Built builder - Bare pipe; existing coating
+   Coal Tar, Polyken Tape; repair coating PROTAL-7200, DENSO 7200, SPC 4888, SPC 2831,
+   Aquawrap; Petro Sleeve, B Sleeve; Other. Defaults: Profile 0 Coal Tar, Profile 1 Bare
+   pipe, Profile 2 PROTAL-7200. Bare pipe writes 0; the weld station gets "GW" in its notes;
+   'no BS' in Other notes leaves a station out of the bending strain. Blank thickness warns
+   and is treated as 0. Both shots at a station share one entry (the workbook copies #1's
+   notes and thickness to #2 and #3).
+4. **Shot names are corrected automatically**: shots at the same spot of pipe are grouped by
+   coordinates and a bad name takes the name of the other shot there (missing shot number,
+   GW typo, a label that wasn't changed, `''`). Every fix is listed on the profile tab and can
+   be overridden.
+5. **Consistency**: per-station 3D difference between measurements against Enterprise's
+   0.20" limit, a chart, and an on-site preview of max deflection and fitted strain. Failures
+   warn; they don't block the download.
 
-   The downloads update with every change.
-4. **Shot names are corrected automatically.** Shots that sit on the same spot of pipe are
-   grouped by coordinates, and a bad name takes the name of the other shot at that spot.
-   That covers a missing shot number, a GW typo, a label that wasn't changed, or `''`. Every
-   fix is listed under Shot names and can be overridden there.
-5. **Consistency**: for each station, the 3D difference between measurements against
-   Enterprise's 0.20" limit, plus a chart. There's also an on-site preview of max deflection
-   and fitted strain, using the same math as the hidden Profile sheet. Failures are warned,
-   but they don't block the download.
+## Y direction
+Enterprise: +X north (downstream), **+Y west**, +Z up. Trimble's Easting is east-positive,
+so the app writes **Y = -Easting**. If an uploaded Pipe Movement file already holds data
+written east-positive (made by hand, or before this change), the app detects it from the
+coordinates and keeps that file's convention so profiles are never mirrored against each
+other. Only the left/right sign of sideways deflection depends on this; deflection size,
+strain and movement amounts do not.
 
 ## Rules the app follows
 - **Shot order is kept.** Rows are written in the order the stations were shot. For Profile

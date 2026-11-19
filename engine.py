@@ -284,9 +284,15 @@ class Station:
     def measurement_id(self, i: int) -> str:
         return f"{self.shots[i].counter:04d}"
 
+    west_positive: bool = False      # write Y as -Easting (Enterprise: +Y = west)
+
+    def xyz(self, i: int):
+        n, e, z = self.shots[i].xyz
+        return (n, -e if self.west_positive else e, z)
+
     @property
     def average(self):
-        pts = [s.xyz for s in self.shots[:3]]
+        pts = [self.xyz(i) for i in range(min(3, len(self.shots)))]
         return tuple(sum(c) / len(pts) for c in zip(*pts))
 
     def differences(self):
@@ -480,10 +486,9 @@ def fill_consistency(book: Workbook, stations: list, exposed_length: Optional[fl
             cols["D"] = st.thickness
             for m, (id_col, x_col) in enumerate((("B", "E"), ("H", "K"), ("N", "Q"))):
                 if m < len(st.shots):
-                    s = st.shots[m]
                     cols[id_col] = st.measurement_id(m)
                     xi = ord(x_col)
-                    cols[x_col], cols[chr(xi + 1)], cols[chr(xi + 2)] = s.n, s.e, s.z
+                    cols[x_col], cols[chr(xi + 1)], cols[chr(xi + 2)] = st.xyz(m)
             avg = st.average
             cache.update(I=st.notes or 0, J=st.thickness or 0, O=st.notes or 0,
                          P=st.thickness or 0, T=f"{st.measurement_id(0)}_Ave",
@@ -567,3 +572,52 @@ def preview(points: list, thickness: list, od_in: Optional[float]) -> dict:
                 return (od_in / 2) * -f2 / (1 + f1 ** 2) ** 1.5
         out["max_fitted_strain"] = float(np.max(np.sqrt(strain(xy) ** 2 + strain(zz) ** 2)))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Several exports at once, and the Y direction
+# ---------------------------------------------------------------------------
+def merge_parsed(files: list) -> ParsedFile:
+    """Combine several CSV exports. Jobs are cumulative, so the same shot can be in more
+    than one export; exact repeats (same name and coordinates) are kept once."""
+    shots, control, errors, warnings, seen = [], [], [], [], set()
+    units = None
+    for f in files:
+        errors += f.errors
+        warnings += f.warnings
+        units = units or f.units
+        control += f.control
+        for s in f.shots:
+            key = (s.raw_name.strip(), round(s.n, 4), round(s.e, 4), round(s.z, 4))
+            if key in seen:
+                continue
+            seen.add(key)
+            s.index = len(shots)
+            s.flags, s.suggestion, s.cluster, s.guess_counter = [], None, None, None
+            shots.append(s)
+    if shots:
+        errors = [e for e in errors if not e.startswith("No pipe shots")]
+    return ParsedFile(shots, control, units, errors, warnings)
+
+
+def detect_west_positive(book: Optional[Workbook], stations: list) -> Optional[bool]:
+    """Which Y convention an uploaded Pipe Movement file already uses, judged from the
+    Profile 0 block against these shots' Eastings (the pipe moves inches; the sign
+    difference is tens of feet). None when there's nothing to compare."""
+    if book is None:
+        return None
+    by_id = {s.station_id: s for s in stations}
+    same = flipped = 0
+    for row in book.rows:
+        st = by_id.get(str(row[0]).strip()) if row[0] else None
+        y = row[5]                                     # F = Profile 0 Y
+        if st is None or not isinstance(y, (int, float)):
+            continue
+        e = sum(x.e for x in st.shots) / len(st.shots)
+        if abs(e) < 1:
+            continue
+        same += abs(y - e) < abs(y + e)
+        flipped += abs(y + e) < abs(y - e)
+    if same == flipped == 0:
+        return None
+    return flipped > same

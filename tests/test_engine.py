@@ -81,3 +81,20 @@ def test_profile_split_by_counter():
     engine.review_names(parsed.shots)
     names = {s.index: s.suggestion for s in parsed.shots}
     assert len(engine.build_profile(parsed.shots, names, 1).stations) == 15
+
+
+def test_merge_drops_repeated_shots_from_cumulative_exports():
+    first = engine.parse_trimble_csv(csv_bytes(_pass(1, LABELS)))
+    both = engine.parse_trimble_csv(csv_bytes(_pass(1, LABELS), _pass(16, LABELS)))
+    merged = engine.merge_parsed([first, both])
+    assert len(merged.shots) == 30
+    assert [s.index for s in merged.shots] == list(range(30))
+
+
+def test_west_positive_flips_y_only():
+    parsed = engine.parse_trimble_csv(csv_bytes(_pass(1, LABELS), _pass(16, LABELS)))
+    engine.review_names(parsed.shots)
+    st = engine.build_profile(parsed.shots, {s.index: s.suggestion for s in parsed.shots}, 0).stations[0]
+    n, e, z = st.average
+    st.west_positive = True
+    assert st.average == (n, -e, z)
