@@ -30,7 +30,7 @@ from xlsx_patch import XlsxPatcher, column_letters
 
 # Bump whenever parsing or the Workbook/ParsedFile shape changes: the app passes it into
 # its cached loaders so Streamlit never serves objects built by older code.
-ENGINE_VERSION = 8
+ENGINE_VERSION = 9
 
 CONSISTENCY_SHEET = "Robotic Raw Data Input"
 MOVEMENT_SHEET = "Robotic Raw Data Average Input"
@@ -399,6 +399,19 @@ def build_profile(shots: list, final_names: dict, profile: int,
     for members in groups.values():
         members.sort(key=lambda x: x.counter)
     groups = dict(sorted(groups.items(), key=lambda kv: kv[1][0].counter))
+    if len(groups) >= 3 and not order:
+        # Pipe order by position: project each station onto the line between the two
+        # stations farthest apart, then start from the end nearest the first shot taken.
+        cen = {k: tuple(sum(c) / len(v) for c in zip(*[x.xyz for x in v])) for k, v in groups.items()}
+        ks = list(cen)
+        a, b = max(((i, j) for i in ks for j in ks),
+                   key=lambda p: math.dist(cen[p[0]][:2], cen[p[1]][:2]))
+        ax = [q - p for p, q in zip(cen[a][:2], cen[b][:2])]
+        pos = {k: sum((c - o) * u for c, o, u in zip(cen[k][:2], cen[a][:2], ax)) for k in ks}
+        first = next(iter(groups))           # station holding the lowest shot number
+        lo, hi = min(pos.values()), max(pos.values())
+        reverse = abs(pos[first] - hi) < abs(pos[first] - lo)
+        groups = dict(sorted(groups.items(), key=lambda kv: pos[kv[0]], reverse=reverse))
     if order:                                # position mode: stations in pipe order
         rank = {name: i for i, name in enumerate(order)}
         groups = dict(sorted(groups.items(), key=lambda kv: rank.get(kv[0], len(rank))))
