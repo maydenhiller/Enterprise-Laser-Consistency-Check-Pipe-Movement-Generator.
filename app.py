@@ -117,8 +117,6 @@ for p in in_csv:
 if not profiles:
     st.stop()
 
-download_box = st.container(border=True)
-
 # ---- per-profile entry ----------------------------------------------------------
 results = {}
 tabs = st.tabs([f"Profile {p}" for p in profiles])
@@ -152,27 +150,66 @@ for p, tab in zip(profiles, tabs):
             results[p] = None
             continue
 
-        # Pipe surface.
+        # Consistency.
+        fails = build.failures
+        worst = max((s.max_difference for s in build.stations if s.max_difference is not None),
+                    default=None)
+        m1, m2 = st.columns(2)
+        m1.metric("Max difference", f"{worst:.3f} in" if worst is not None else "-",
+                  delta=f"limit {engine.LIMIT_IN:.2f} in", delta_color="off")
+        m2.metric("Stations over the limit", f"{len(fails)} of {len(build.stations)}")
+        st.bar_chart(pd.DataFrame({"Station": [s.station_id for s in build.stations],
+                                   "Difference (in)": [s.max_difference or 0
+                                                       for s in build.stations]}),
+                     x="Station", y="Difference (in)", height=220)
+
+        # Pipe surface: everywhere else -> ranges -> single-station changes.
         st.subheader("What's on the pipe at each station?")
+        ids = [s.station_id for s in build.stations]
         a, b = st.columns([2, 1])
-        default = a.selectbox("Most of the pipe has", SURFACES,
+        default = a.selectbox("Everywhere not covered by a range below", SURFACES,
                               index=SURFACES.index(DEFAULT_SURFACE.get(p, "Bare pipe")),
                               key=f"surf_{p}")
-        default_thick = b.number_input("Total thickness (in)", min_value=0.0, step=0.005,
+        default_thick = b.number_input("Thickness (in)", min_value=0.0, step=0.005,
                                        format="%.3f", value=None, key=f"thick_{p}",
                                        disabled=default == "Bare pipe")
-        st.caption("Change any station that differs (a sleeve, a tape cut). Both shots at a "
-                   "station share one entry - the workbook copies #1's notes and thickness to "
-                   "#2 and #3. 'no BS' in Other notes leaves a station out of bending strain.")
+        st.write("**Ranges** - add a row for each stretch that's different (a sleeve, a tape "
+                 "cut, a repair coating). From and To are included; later rows win where "
+                 "ranges overlap.")
+        ranges = st.data_editor(
+            pd.DataFrame({"From": pd.Series(dtype="str"), "To": pd.Series(dtype="str"),
+                          "Surface": pd.Series(dtype="str"),
+                          "Thickness (in)": pd.Series(dtype="float")}),
+            num_rows="dynamic", hide_index=True, width="stretch", key=f"ranges_{p}",
+            column_config={
+                "From": st.column_config.SelectboxColumn(options=ids, required=True),
+                "To": st.column_config.SelectboxColumn(options=ids, required=True),
+                "Surface": st.column_config.SelectboxColumn(options=SURFACES, required=True),
+                "Thickness (in)": st.column_config.NumberColumn(min_value=0.0, step=0.001,
+                                                                format="%.3f"),
+            })
+        # Start from what a re-uploaded file already holds, else the "everywhere" choice.
         prefill = {k: v for k, v in engine.existing_notes(cc, p).items() if v != ("", None)}
+        assigned, others = {}, {}
+        for k in ids:
+            if k in prefill:
+                notes, thick = prefill[k]
+                surface = next((x for x in SURFACES if x.lower() in str(notes).lower()), "Other")
+                assigned[k] = (surface, thick)
+                others[k] = str(notes) if surface == "Other" else ""
+            else:
+                assigned[k] = (default, default_thick)
+        for _, r in ranges.iterrows():
+            if r["From"] in ids and r["To"] in ids and isinstance(r["Surface"], str):
+                i, j = sorted((ids.index(r["From"]), ids.index(r["To"])))
+                thick = None if pd.isna(r["Thickness (in)"]) else float(r["Thickness (in)"])
+                for k in ids[i:j + 1]:
+                    assigned[k] = (r["Surface"], thick)
+
         rows = []
         for s in build.stations:
-            if s.station_id in prefill:          # re-upload: keep what's in the file
-                notes, thick = prefill[s.station_id]
-                surface = next((x for x in SURFACES if x.lower() in str(notes).lower()), "Other")
-                other = "" if surface != "Other" else str(notes)
-            else:
-                surface, thick, other = default, default_thick, ""
+            surface, thick = assigned[s.station_id]
+            other = others.get(s.station_id, "") if surface == "Other" else ""
             md = s.max_difference
             rows.append({"Station": s.station_id,
                          "Shots": ", ".join(f"{x.counter:04d}" for x in s.shots),
@@ -180,6 +217,8 @@ for p, tab in zip(profiles, tabs):
                          "Thickness (in)": 0.0 if surface == "Bare pipe" else thick,
                          "Other notes": other,
                          "Max diff (in)": round(md, 3) if md is not None else None})
+        st.write("**Every station** - the result of the above. Change a single station here "
+                 "if needed.")
         table = st.data_editor(
             pd.DataFrame(rows), hide_index=True, width="stretch", key=f"stations_{p}",
             disabled=["Station", "Shots", "Max diff (in)"],
@@ -187,13 +226,17 @@ for p, tab in zip(profiles, tabs):
                 "Surface": st.column_config.SelectboxColumn(options=SURFACES, required=True),
                 "Thickness (in)": st.column_config.NumberColumn(min_value=0.0, step=0.001,
                                                                 format="%.3f"),
+                "Other notes": st.column_config.TextColumn(
+                    help="Skid support, etc. 'no BS' leaves the station out of bending strain."),
                 "Max diff (in)": st.column_config.NumberColumn(
                     help="Largest difference between this station's shots. Limit 0.20 in."),
             })
+        st.caption("Both shots at a station share one entry - the workbook copies #1's notes "
+                   "and thickness to #2 and #3.")
         no_thick = []
         for s, (_, r) in zip(build.stations, table.iterrows()):
             parts = (["GW"] if "'" not in s.station_id else []) + \
-                    ([r["Surface"]] if r["Surface"] not in ("Other",) else []) + \
+                    ([r["Surface"]] if r["Surface"] != "Other" else []) + \
                     [str(r["Other notes"] or "").strip()]
             s.notes = ", ".join(x for x in parts if x)
             if r["Surface"] == "Bare pipe":
@@ -204,28 +247,19 @@ for p, tab in zip(profiles, tabs):
             else:
                 s.thickness = float(r["Thickness (in)"])
 
-        # Consistency.
-        fails = build.failures
-        worst = max((s.max_difference for s in build.stations if s.max_difference is not None),
-                    default=None)
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Max difference", f"{worst:.3f} in" if worst is not None else "-",
-                  delta=f"limit {engine.LIMIT_IN:.2f} in", delta_color="off")
-        m2.metric("Stations over the limit", f"{len(fails)} of {len(build.stations)}")
         od = cc.header["Pipe OD (in)"]
         pv = engine.preview([s.average for s in build.stations],
                             [s.thickness for s in build.stations],
                             od if isinstance(od, (int, float)) else None)
         if pv:
-            m3.metric("Fitted strain (average, preview)", f"{pv.get('max_fitted_strain', 0):.6f}",
-                      delta=f"max deflection {pv['max_deflection_in']:.2f} in",
-                      delta_color="off")
-        st.bar_chart(pd.DataFrame({"Station": [s.station_id for s in build.stations],
-                                   "Difference (in)": [s.max_difference or 0
-                                                       for s in build.stations]}),
-                     x="Station", y="Difference (in)", height=240)
+            st.caption(f"Preview with these thicknesses: max deflection "
+                       f"{pv['max_deflection_in']:.2f} in, fitted strain (average) "
+                       f"{pv.get('max_fitted_strain', 0):.6f}. The workbook is the record.")
         results[p] = {"cc_name": cc_name, "cc": cc, "build": build, "fails": fails,
                       "no_thick": no_thick, "fixed": len(fix_rows)}
+
+
+download_box = st.container(border=True)   # below the profile tabs
 
 # ---- Y direction ------------------------------------------------------------------
 first = next((r for r in results.values() if r), None)

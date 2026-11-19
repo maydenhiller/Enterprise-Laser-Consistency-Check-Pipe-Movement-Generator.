@@ -16,8 +16,10 @@ This app fills only the measurement area, plus Exposed Length when it's blank.
 2. **Download right away.** Every workbook is filled on upload and comes back with the same
    name, plus a zip of all of them. Profiles are written into the Pipe Movement file in
    order (0, then 1, then 2), with rows matched by station.
-3. **Each profile tab** asks what's on the pipe: one choice for most of the pipe, then
-   per-station changes. Choices match the As-Built builder - Bare pipe; existing coating
+3. **Each profile tab** shows the consistency results, then asks what's on the pipe in three
+   layers: one choice for everywhere, **ranges** (From station / To station / surface /
+   thickness, one row per stretch such as a sleeve or tape cut; later rows win), then
+   single-station changes in the full table. The downloads sit below the tabs. Choices match the As-Built builder - Bare pipe; existing coating
    Coal Tar, Polyken Tape; repair coating PROTAL-7200, DENSO 7200, SPC 4888, SPC 2831,
    Aquawrap; Petro Sleeve, B Sleeve; Other. Defaults: Profile 0 Coal Tar, Profile 1 Bare
    pipe, Profile 2 PROTAL-7200. Bare pipe writes 0; the weld station gets "GW" in its notes;
