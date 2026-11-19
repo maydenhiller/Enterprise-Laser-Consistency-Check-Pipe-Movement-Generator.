@@ -30,7 +30,7 @@ from xlsx_patch import XlsxPatcher, column_letters
 
 # Bump whenever parsing or the Workbook/ParsedFile shape changes: the app passes it into
 # its cached loaders so Streamlit never serves objects built by older code.
-ENGINE_VERSION = 4
+ENGINE_VERSION = 5
 
 CONSISTENCY_SHEET = "Robotic Raw Data Input"
 MOVEMENT_SHEET = "Robotic Raw Data Average Input"
@@ -44,7 +44,7 @@ NAME_RE = re.compile(r"^(?P<station>.*?)\s+(?P<counter>\d{4})$")
 STATION_RE = re.compile(
     r"^(?:(?P<dist>\d+(?:\.\d+)?)\s*'+\s*)?(?:(?P<dir>[UD])\s*/?\s*S\s+(?:OF\s+)?)?GW\s*#?\s*(?P<gw>\d+)$",
     re.I)
-CONTROL_RE = re.compile(r"\b(BM|BS|BENCH\s*MARK|BACK\s*SIGHT|CHECK)\b", re.I)
+CONTROL_RE = re.compile(r"\b(BM|BS|BENCH\s*MARK|BACK\s*SIGHT|CHECK)\d*\b|\bDO NOT USE\b", re.I)
 
 
 # ---------------------------------------------------------------------------

@@ -124,3 +124,10 @@ def test_bare_weld_name_and_order_by_shot_number():
 def test_question_mark_coordinates_explained():
     parsed = engine.parse_trimble_csv(HEADER.encode() + b"\nbs2,?,?,?,\n3' us gw 1 0001,?,?,?,\n")
     assert parsed.errors and "backsight azimuth" in parsed.errors[0]
+
+
+def test_numbered_benchmark_and_backsight_are_control():
+    data = (HEADER + "\ndig 19a bm 11.19.26,0,0,0\ndig 19a bs2 11.19.26,87.3,0.2,-2.4"
+            "\ndig 19a bm2 11.19.26,0,0,0\n3' us gw 1 0001,10,-20,-1\n").encode()
+    parsed = engine.parse_trimble_csv(data)
+    assert len(parsed.control) == 3 and len(parsed.shots) == 1
