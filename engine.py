@@ -28,6 +28,10 @@ import openpyxl
 
 from xlsx_patch import XlsxPatcher, column_letters
 
+# Bump whenever parsing or the Workbook/ParsedFile shape changes: the app passes it into
+# its cached loaders so Streamlit never serves objects built by older code.
+ENGINE_VERSION = 2
+
 CONSISTENCY_SHEET = "Robotic Raw Data Input"
 MOVEMENT_SHEET = "Robotic Raw Data Average Input"
 FIRST_ROW, LAST_ROW = 8, 107          # 100 stations; rows must never be inserted/deleted

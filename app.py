@@ -27,14 +27,14 @@ XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 @st.cache_data(show_spinner=False)
-def load_csvs(blobs: tuple):
+def load_csvs(blobs: tuple, version: int):
     merged = engine.merge_parsed([engine.parse_trimble_csv(b) for b in blobs])
     engine.review_names(merged.shots)
     return merged
 
 
 @st.cache_data(show_spinner=False)
-def load_book(data: bytes):
+def load_book(data: bytes, version: int):
     return engine.read_workbook(data)
 
 
@@ -51,7 +51,7 @@ if not (csv_files and cc_files):
     st.info("Upload the CSV export(s) and at least one Consistency Check to start.")
     st.stop()
 
-parsed = load_csvs(tuple(f.getvalue() for f in csv_files))
+parsed = load_csvs(tuple(f.getvalue() for f in csv_files), engine.ENGINE_VERSION)
 stop = False
 for e in parsed.errors:
     st.error(e)
@@ -60,7 +60,7 @@ for e in parsed.errors:
 books = {}
 for f in cc_files:
     try:
-        book = load_book(f.getvalue())
+        book = load_book(f.getvalue(), engine.ENGINE_VERSION)
     except Exception as exc:
         st.error(f"{f.name}: {exc}")
         stop = True
@@ -81,7 +81,7 @@ for f in cc_files:
 mv = None
 if mv_file:
     try:
-        mv = load_book(mv_file.getvalue())
+        mv = load_book(mv_file.getvalue(), engine.ENGINE_VERSION)
     except Exception as exc:
         st.error(f"{mv_file.name}: {exc}")
         stop = True
@@ -124,7 +124,7 @@ tabs = st.tabs([f"Profile {p}" for p in profiles])
 for p, tab in zip(profiles, tabs):
     with tab:
         cc_name, cc = books[p]
-        on_file = cc.header["Technician Name"]
+        on_file = cc.header.get("Technician Name")
         tech = st.text_input(f"Technician who shot Profile {p}",
                              value="" if on_file in (None, "xx") else str(on_file).strip(),
                              key=f"tech_{p}",
@@ -277,8 +277,8 @@ west_positive = True if existing_convention is None else existing_convention
 # ---- fill everything ----------------------------------------------------------------
 outputs, notes = {}, []
 crew = []
-if mv is not None and mv.header["Technician Name"] not in (None, "", "xx"):
-    crew += [n.strip() for n in str(mv.header["Technician Name"]).split("/") if n.strip()]
+if mv is not None and mv.header.get("Technician Name") not in (None, "", "xx"):
+    crew += [n.strip() for n in str(mv.header.get("Technician Name")).split("/") if n.strip()]
 for p in profiles:
     if results.get(p) and results[p]["tech"]:
         crew.append(results[p]["tech"])
