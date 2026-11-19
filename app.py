@@ -117,11 +117,6 @@ for p in in_csv:
 if not profiles:
     st.stop()
 
-on_file = next((str(b.header["Technician Name"]).strip() for _, b in books.values()
-                if b.header["Technician Name"] not in (None, "", "xx")), "")
-technician = st.text_input("Technician name", value=on_file, key="technician",
-                           help="Written to Technician Name on every workbook in this run. "
-                                "Leave blank to keep what each file already has.").strip()
 
 # ---- per-profile entry ----------------------------------------------------------
 results = {}
@@ -129,6 +124,12 @@ tabs = st.tabs([f"Profile {p}" for p in profiles])
 for p, tab in zip(profiles, tabs):
     with tab:
         cc_name, cc = books[p]
+        on_file = cc.header["Technician Name"]
+        tech = st.text_input(f"Technician who shot Profile {p}",
+                             value="" if on_file in (None, "xx") else str(on_file).strip(),
+                             key=f"tech_{p}",
+                             help="Written to this profile's Consistency Check. Leave blank to "
+                                  "keep what the file already has.").strip()
         shots = [s for s in parsed.shots if s.profile == p]
         final = {s.index: s.suggestion for s in shots}
 
@@ -262,7 +263,7 @@ for p, tab in zip(profiles, tabs):
                        f"{pv['max_deflection_in']:.2f} in, fitted strain (average) "
                        f"{pv.get('max_fitted_strain', 0):.6f}. The workbook is the record.")
         results[p] = {"cc_name": cc_name, "cc": cc, "build": build, "fails": fails,
-                      "no_thick": no_thick, "fixed": len(fix_rows)}
+                      "no_thick": no_thick, "fixed": len(fix_rows), "tech": tech}
 
 
 download_box = st.container(border=True)   # below the profile tabs
@@ -275,6 +276,13 @@ west_positive = True if existing_convention is None else existing_convention
 
 # ---- fill everything ----------------------------------------------------------------
 outputs, notes = {}, []
+crew = []
+if mv is not None and mv.header["Technician Name"] not in (None, "", "xx"):
+    crew += [n.strip() for n in str(mv.header["Technician Name"]).split("/") if n.strip()]
+for p in profiles:
+    if results.get(p) and results[p]["tech"]:
+        crew.append(results[p]["tech"])
+crew_text = " / ".join({n.lower(): n for n in reversed(crew)}[k] for k in dict.fromkeys(n.lower() for n in crew))  # unique, in order
 mv_bytes = mv_file.getvalue() if mv_file else None
 for p in profiles:
     r = results.get(p)
@@ -287,11 +295,11 @@ for p in profiles:
     try:
         outputs[r["cc_name"].name] = engine.fill_consistency(r["cc"], stations,
                                                              r["build"].exposed_length,
-                                                             technician or None)
+                                                             r["tech"] or None)
         if current_mv is not None:
             mv_bytes = engine.fill_movement(current_mv, p, [s for s in stations if s not in extra],
                                             missing, r["build"].exposed_length,
-                                            technician or None)
+                                            crew_text or None)
     except Exception as exc:
         notes.append(("error", f"Profile {p}: couldn't write the workbooks: {exc}"))
         continue

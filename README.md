@@ -6,7 +6,7 @@ Streamlit app that fills Enterprise's **EPROD Robotic Laser Consistency Check** 
 
 Headers (LID, AID, line name, dig #, OD, WT, SMYS) come from the
 [Enterprise Dig File Generator](https://github.com/maydenhiller/Enterprise-Dig-File-Generator).
-This app fills the measurement area, Exposed Length when it's blank, and Technician Name (typed once per run; blank keeps what each file has).
+This app fills the measurement area, Exposed Length when it's blank, and Technician Name: one per profile tab, written to that profile's Consistency Check. The Pipe Movement file lists everyone who shot a profile on the dig (e.g. "Tod Coffelt / Jane Doe"), keeping names already in it. Blank keeps what a file has.
 
 ## One dig per run
 1. Upload the Trimble CSV export(s), one or more Consistency Checks (Profile 0, 1, 2 -
