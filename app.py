@@ -127,6 +127,11 @@ if not profiles:
 
 
 # ---- per-profile entry ----------------------------------------------------------
+bm_dates = engine.dates_in_names(parsed.control)
+if bm_dates:
+    st.caption("Dates in the benchmark/backsight names: "
+               + ", ".join(engine.date_text(d) for d in bm_dates))
+
 results = {}
 tabs = st.tabs([f"Profile {p}" for p in profiles])
 for p, tab in zip(profiles, tabs):
@@ -138,6 +143,13 @@ for p, tab in zip(profiles, tabs):
                              key=f"tech_{p}",
                              help="Written to this profile's Consistency Check. Leave blank to "
                                   "keep what the file already has.").strip()
+        d1, d2 = st.columns(2)
+        start = d1.date_input(f"Profile {p} start date", key=f"start_{p}", format="MM/DD/YYYY",
+                              value=engine.parse_date(cc.header.get("Date Start")))
+        end = d2.date_input(f"Profile {p} end date", key=f"end_{p}", format="MM/DD/YYYY",
+                            value=engine.parse_date(cc.header.get("Date End")))
+        if start and end and end < start:
+            st.warning("The end date is before the start date.")
         shots = [s for s in parsed.shots if s.profile == p]
         final = {s.index: s.suggestion for s in shots}
 
@@ -316,6 +328,7 @@ for p, tab in zip(profiles, tabs):
                        f"{pv.get('max_fitted_strain', 0):.6f}. The workbook is the record.")
         results[p] = {"cc_name": cc_name, "cc": cc, "build": build, "fails": fails,
                       "no_thick": no_thick, "fixed": len(fix_rows), "tech": tech,
+                      "dates": (start, end),
                       "by_position": renamed}
 
 
@@ -335,6 +348,12 @@ if mv is not None and mv.header.get("Technician Name") not in (None, "", "xx"):
 for p in profiles:
     if results.get(p) and results[p]["tech"]:
         crew.append(results[p]["tech"])
+starts = [r["dates"][0] for r in results.values() if r and r["dates"][0]]
+ends = [r["dates"][1] for r in results.values() if r and r["dates"][1]]
+if mv is not None:
+    starts += [d for d in [engine.parse_date(mv.header.get("Date Start"))] if d]
+    ends += [d for d in [engine.parse_date(mv.header.get("Date End"))] if d]
+mv_dates = (min(starts) if starts else None, max(ends) if ends else None)
 crew_text = " / ".join({n.lower(): n for n in reversed(crew)}[k] for k in dict.fromkeys(n.lower() for n in crew))  # unique, in order
 mv_bytes = mv_file.getvalue() if mv_file else None
 for p in profiles:
@@ -348,11 +367,11 @@ for p in profiles:
     try:
         outputs[r["cc_name"].name] = engine.fill_consistency(r["cc"], stations,
                                                              r["build"].exposed_length,
-                                                             r["tech"] or None)
+                                                             r["tech"] or None, r["dates"])
         if current_mv is not None:
             mv_bytes = engine.fill_movement(current_mv, p, [s for s in stations if s not in extra],
                                             missing, r["build"].exposed_length,
-                                            crew_text or None)
+                                            crew_text or None, mv_dates)
     except Exception as exc:
         notes.append(("error", f"Profile {p}: couldn't write the workbooks: {exc}"))
         continue

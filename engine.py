@@ -30,7 +30,7 @@ from xlsx_patch import XlsxPatcher, column_letters
 
 # Bump whenever parsing or the Workbook/ParsedFile shape changes: the app passes it into
 # its cached loaders so Streamlit never serves objects built by older code.
-ENGINE_VERSION = 11
+ENGINE_VERSION = 12
 
 CONSISTENCY_SHEET = "Robotic Raw Data Input"
 MOVEMENT_SHEET = "Robotic Raw Data Average Input"
@@ -471,7 +471,7 @@ def build_profile(shots: list, final_names: dict, profile: int,
 HEADER_CELLS = {"LID": "B2", "AID": "E2", "AID Name": "H2", "Dig No.": "B3",
                 "Pipe OD (in)": "B4", "Pipe WT (in)": "E4", "SMYS (psi)": "H4",
                 "Exposed Length (ft)": "L4", "Profile No.": "P1",
-                "Technician Name": "L3"}
+                "Technician Name": "L3", "Date Start": "E3", "Date End": "H3"}
 
 
 @dataclass
@@ -577,7 +577,7 @@ def order_stations(build: ProfileBuild, movement: Optional[Workbook]) -> tuple:
 
 
 def fill_consistency(book: Workbook, stations: list, exposed_length: Optional[float],
-                     technician: Optional[str] = None) -> bytes:
+                     technician: Optional[str] = None, dates: tuple = (None, None)) -> bytes:
     p = XlsxPatcher(book.data)
     values, cached = {}, {}
     for i in range(MAX_STATIONS):
@@ -605,6 +605,7 @@ def fill_consistency(book: Workbook, stations: list, exposed_length: Optional[fl
         values["L4"] = exposed_length
     if technician:
         values["L3"] = technician
+    values.update(_date_cells(dates))
     missing = p.set_values(CONSISTENCY_SHEET, values)
     if missing:
         raise ValueError("Could not place cells: " + ", ".join(missing[:10]))
@@ -614,7 +615,8 @@ def fill_consistency(book: Workbook, stations: list, exposed_length: Optional[fl
 
 
 def fill_movement(book: Workbook, profile: int, stations: list, missing: list,
-                  exposed_length: Optional[float], technician: Optional[str] = None) -> bytes:
+                  exposed_length: Optional[float], technician: Optional[str] = None,
+                  dates: tuple = (None, None)) -> bytes:
     """Write this profile's averages into its block, rows aligned by station ID."""
     p = XlsxPatcher(book.data)
     start = 2 + 6 * profile                          # B for Profile 0, H for 1, N for 2, T for 3
@@ -641,6 +643,7 @@ def fill_movement(book: Workbook, profile: int, stations: list, missing: list,
         values["L4"] = exposed_length
     if technician:
         values["L3"] = technician
+    values.update(_date_cells(dates))
     missing_cells = p.set_values(MOVEMENT_SHEET, values)
     if missing_cells:
         raise ValueError("Could not place cells: " + ", ".join(missing_cells[:10]))
@@ -852,3 +855,51 @@ def pipe_order(spots: list) -> list:
     if abs(first.along - spots[-1].along) < abs(first.along - spots[0].along):
         names.reverse()
     return names
+
+
+# ---------------------------------------------------------------------------
+# Dates (the header cells are text-formatted; written the way the techs type them)
+# ---------------------------------------------------------------------------
+import datetime as _dt
+
+
+def date_text(d) -> Optional[str]:
+    return f"{d.month}/{d.day}/{d.year % 100:02d}" if d else None
+
+
+def parse_date(value):
+    """A header date cell (text like 10/9/26, or a real date) -> date, else None."""
+    if isinstance(value, _dt.datetime):
+        return value.date()
+    if isinstance(value, _dt.date):
+        return value
+    m = re.match(r"^\s*(\d{1,2})[/.-](\d{1,2})[/.-](\d{2}|\d{4})\s*$", str(value or ""))
+    if not m:
+        return None
+    year = int(m.group(3))
+    year += 2000 if year < 100 else 0
+    try:
+        return _dt.date(year, int(m.group(1)), int(m.group(2)))
+    except ValueError:
+        return None
+
+
+def _date_cells(dates: tuple) -> dict:
+    start, end = dates
+    out = {}
+    if start:
+        out["E3"] = date_text(start)
+    if end:
+        out["H3"] = date_text(end)
+    return out
+
+
+def dates_in_names(control: list) -> list:
+    """Dates written in benchmark/backsight names, e.g. 'dig 20a bm 11.20.26'."""
+    found = set()
+    for name, *_ in control:
+        for m in re.finditer(r"(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})", name):
+            d = parse_date(f"{m.group(1)}/{m.group(2)}/{m.group(3)}")
+            if d:
+                found.add(d)
+    return sorted(found)
