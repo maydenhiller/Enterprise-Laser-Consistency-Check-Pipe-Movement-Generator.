@@ -179,3 +179,17 @@ def test_position_mode_drops_wrong_height_and_keeps_pipe_order():
     assert not build.errors
     assert [s.station_id for s in build.stations] == [
         "3' U/S GW 7", "GW 7", "3' D/S GW 7", "6' D/S GW 7", "9' D/S GW 7", "12' D/S GW 7"]
+
+
+def test_wrong_target_height_shot_left_out():
+    rows = [HEADER, "bm,0,0,0"]
+    for p, start in ((0, 1), (1, 6)):
+        for i in range(5):
+            z = -4.0 - (0.455 if (p, i) == (0, 2) else 0)        # one shot True height 0
+            rows.append(f"{3 * i}' ds gw 9 {start + i:04d},{20 + 3 * i + 0.003 * p:.3f},-30,{z:.3f}")
+    parsed = engine.parse_trimble_csv("\n".join(rows).encode())
+    engine.review_names(parsed.shots)
+    build = engine.build_profile(parsed.shots, {s.index: s.suggestion for s in parsed.shots}, 0)
+    st = build.stations[2]
+    assert [x.counter for x in st.shots] == [8]
+    assert any("0003 left out" in w for w in build.warnings)

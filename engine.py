@@ -30,7 +30,7 @@ from xlsx_patch import XlsxPatcher, column_letters
 
 # Bump whenever parsing or the Workbook/ParsedFile shape changes: the app passes it into
 # its cached loaders so Streamlit never serves objects built by older code.
-ENGINE_VERSION = 9
+ENGINE_VERSION = 10
 
 CONSISTENCY_SHEET = "Robotic Raw Data Input"
 MOVEMENT_SHEET = "Robotic Raw Data Average Input"
@@ -416,6 +416,22 @@ def build_profile(shots: list, final_names: dict, profile: int,
         rank = {name: i for i, name in enumerate(order)}
         groups = dict(sorted(groups.items(), key=lambda kv: rank.get(kv[0], len(rank))))
     stations = [Station(k, v) for k, v in groups.items()]
+    # A shot whose elevation is off from the other shot(s) at its station by more than
+    # 0.25 ft is a target-height mistake (5.000 ft backsight rod left on, True height 0
+    # instead of Bottom mount = 0.44 ft), not pipe movement. Keep the shot that lines up
+    # with the neighbouring stations and leave the other out.
+    def mid_z(st):
+        zs = sorted(x.z for x in st.shots)
+        return zs[len(zs) // 2]
+    for i, st in enumerate(stations):
+        if len(st.shots) < 2 or max(x.z for x in st.shots) - min(x.z for x in st.shots) <= 0.25:
+            continue
+        near = [mid_z(stations[j]) for j in (i - 1, i + 1) if 0 <= j < len(stations)]
+        expected = sum(near) / len(near) if near else mid_z(st)
+        bad = max(st.shots, key=lambda x: abs(x.z - expected))
+        st.shots.remove(bad)
+        warnings.append(f"{st.station_id}: shot {bad.counter:04d} left out - its elevation is "
+                        f"{bad.z - expected:+.2f} ft off the pipe line (wrong target height?).")
     for st in stations:
         if len(st.shots) == 1:
             warnings.append(f"{st.station_id}: only one measurement - Enterprise requires two.")
