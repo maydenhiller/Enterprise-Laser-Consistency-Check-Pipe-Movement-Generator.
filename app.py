@@ -348,12 +348,16 @@ if mv is not None and mv.header.get("Technician Name") not in (None, "", "xx"):
 for p in profiles:
     if results.get(p) and results[p]["tech"]:
         crew.append(results[p]["tech"])
-starts = [r["dates"][0] for r in results.values() if r and r["dates"][0]]
-ends = [r["dates"][1] for r in results.values() if r and r["dates"][1]]
-if mv is not None:
-    starts += [d for d in [engine.parse_date(mv.header.get("Date Start"))] if d]
-    ends += [d for d in [engine.parse_date(mv.header.get("Date End"))] if d]
-mv_dates = (min(starts) if starts else None, max(ends) if ends else None)
+# Pipe Movement dates: start = Profile 0's start; end = the end date of the last
+# profile on the dig (the highest-numbered one in this run or already in the file).
+# Blank keeps what the file has.
+mv_start = results[0]["dates"][0] if results.get(0) else None
+done = [p for p in results if results[p]]
+last_in_file = max([q for q in range(4) if mv is not None and engine.movement_has_profile(mv, q)],
+                   default=-1)
+last = max(done, default=-1)
+mv_end = results[last]["dates"][1] if last >= 0 and last >= last_in_file else None
+mv_dates = (mv_start, mv_end)
 crew_text = " / ".join({n.lower(): n for n in reversed(crew)}[k] for k in dict.fromkeys(n.lower() for n in crew))  # unique, in order
 mv_bytes = mv_file.getvalue() if mv_file else None
 for p in profiles:
