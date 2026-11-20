@@ -35,8 +35,15 @@ XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 @st.cache_data(show_spinner=False)
-def load_csvs(blobs: tuple, version: int):
-    merged = engine.merge_parsed([engine.parse_trimble_csv(b) for b in blobs])
+def read_csv(data: bytes, version: int):
+    return engine.parse_trimble_csv(data)
+
+
+@st.cache_data(show_spinner=False)
+def load_csvs(blobs: tuple, profiles: tuple, version: int):
+    files = [engine.apply_file_profile(engine.parse_trimble_csv(b), p)
+             for b, p in zip(blobs, profiles)]
+    merged = engine.merge_parsed(files)
     engine.review_names(merged.shots)
     return merged
 
@@ -48,7 +55,8 @@ def load_book(data: bytes, version: int):
 
 c1, c2, c3 = st.columns(3)
 csv_files = c1.file_uploader("1. Trimble export(s) (.csv)", type=["csv"],
-                             accept_multiple_files=True)
+                             accept_multiple_files=True,
+                             help="One export with every profile, or one export per profile.")
 cc_files = c2.file_uploader("2. Consistency Check(s) (.xlsx)", type=["xlsx"],
                             accept_multiple_files=True,
                             help="One per profile. Upload every profile you have shots for.")
@@ -59,7 +67,31 @@ if not (csv_files and cc_files):
     st.info("Upload the CSV export(s) and at least one Consistency Check to start.")
     st.stop()
 
-parsed = load_csvs(tuple(f.getvalue() for f in csv_files), engine.ENGINE_VERSION)
+# Which profile each CSV holds. One file with every profile (shot numbers 0001 / 1001 /
+# 2001) works as before; a job kept per profile can number every profile from 0001 and
+# is set here (picked up from "Profile 1" in the job or file name when it's there).
+FROM_NUMBERS = "From shot numbers"
+choices = [FROM_NUMBERS, 0, 1, 2, 3]
+file_profiles = []
+if len(csv_files) > 1 or any(engine.detect_file_profile(read_csv(f.getvalue(), engine.ENGINE_VERSION),
+                                                         f.name) is not None for f in csv_files):
+    st.write("**Profile in each CSV**")
+    cols = st.columns(min(4, len(csv_files)))
+for i, f in enumerate(csv_files):
+    found = engine.detect_file_profile(read_csv(f.getvalue(), engine.ENGINE_VERSION), f.name)
+    if len(csv_files) > 1 or found is not None:
+        pick = cols[i % len(cols)].selectbox(
+            f.name, choices, index=choices.index(found) if found is not None else 0,
+            key=f"csvprof_{i}_{f.name}",
+            format_func=lambda c: c if c == FROM_NUMBERS else f"Profile {c}",
+            help="'From shot numbers' reads the profile from each shot's first digit "
+                 "(0001 = Profile 0, 1001 = Profile 1). Pick a profile if this file is "
+                 "a job for one profile only.")
+    else:
+        pick = FROM_NUMBERS
+    file_profiles.append(None if pick == FROM_NUMBERS else pick)
+parsed = load_csvs(tuple(f.getvalue() for f in csv_files), tuple(file_profiles),
+                   engine.ENGINE_VERSION)
 stop = False
 for e in parsed.errors:
     st.error(e)

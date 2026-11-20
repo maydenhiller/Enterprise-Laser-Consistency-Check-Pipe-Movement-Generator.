@@ -9,7 +9,10 @@ Headers (LID, AID, line name, dig #, OD, WT, SMYS) come from the
 This app fills the measurement area, Exposed Length when it's blank, and Technician Name: one per profile tab, written to that profile's Consistency Check. The Pipe Movement file lists everyone who shot a profile on the dig (e.g. "Tod Coffelt / Jane Doe"), keeping names already in it. Blank keeps what a file has.
 
 ## One dig per run
-1. Upload the Trimble CSV export(s), one or more Consistency Checks (Profile 0, 1, 2 -
+1. Upload the Trimble CSV export(s): one export with every profile (shot numbers 0001 / 1001 /
+   2001 tell them apart), or one export per profile, each numbered from 0001. With more than
+   one CSV, a dropdown per file sets its profile; it's picked up automatically when the job or
+   file name says "Profile 1", and otherwise reads the shot numbers. Then upload one or more Consistency Checks (Profile 0, 1, 2 -
    whichever you have shots for) and the Pipe Movement workbook. Several CSVs are fine; a
    shot that's in more than one export (jobs are cumulative) is used once. Each Consistency
    Check is matched to its profile by its Profile No. cell.

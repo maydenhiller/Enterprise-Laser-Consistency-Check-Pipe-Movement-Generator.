@@ -193,3 +193,22 @@ def test_wrong_target_height_shot_left_out():
     st = build.stations[2]
     assert [x.counter for x in st.shots] == [8]
     assert any("0003 left out" in w for w in build.warnings)
+
+
+def test_one_file_per_profile_numbered_from_0001():
+    p0 = engine.parse_trimble_csv(csv_bytes(_pass(1, LABELS), _pass(16, LABELS)))
+    p1 = engine.parse_trimble_csv(
+        b"Job:AID 1 Dig 01A Profile 1,Version:26.10,Units:USSurveyFeet,\n" +
+        csv_bytes(_pass(1, LABELS, z_shift=-0.04), _pass(16, LABELS, z_shift=-0.04)).split(b"\n", 1)[1])
+    assert engine.detect_file_profile(p0, "dig 1a.csv") is None
+    assert engine.detect_file_profile(p1, "x.csv") == 1
+    assert engine.detect_file_profile(p0, "Dig 1A profile 2.csv") == 2
+    merged = engine.merge_parsed([engine.apply_file_profile(p0, None),
+                                  engine.apply_file_profile(p1, 1)])
+    engine.review_names(merged.shots)
+    assert not any(s.flags for s in merged.shots)          # repeated numbers across profiles are fine
+    names = {s.index: s.suggestion for s in merged.shots}
+    b0 = engine.build_profile(merged.shots, names, 0)
+    b1 = engine.build_profile(merged.shots, names, 1)
+    assert len(b0.stations) == len(b1.stations) == 15
+    assert abs(b1.stations[0].average[2] - b0.stations[0].average[2] + 0.04) < 1e-9

@@ -30,7 +30,7 @@ from xlsx_patch import XlsxPatcher, column_letters
 
 # Bump whenever parsing or the Workbook/ParsedFile shape changes: the app passes it into
 # its cached loaders so Streamlit never serves objects built by older code.
-ENGINE_VERSION = 12
+ENGINE_VERSION = 13
 
 CONSISTENCY_SHEET = "Robotic Raw Data Input"
 MOVEMENT_SHEET = "Robotic Raw Data Average Input"
@@ -71,8 +71,12 @@ class Shot:
     def xyz(self):
         return (self.n, self.e, self.z)
 
+    profile_override: Optional[int] = None   # set when a whole file is one profile
+
     @property
     def profile(self) -> Optional[int]:
+        if self.profile_override is not None:
+            return self.profile_override
         c = self.counter if self.counter is not None else self.guess_counter
         return None if c is None else c // 1000
 
@@ -84,6 +88,7 @@ class ParsedFile:
     units: Optional[str]
     errors: list
     warnings: list
+    job: str = ""
 
 
 def canonical_station(text: str):
@@ -128,7 +133,7 @@ def parse_trimble_csv(data: bytes) -> ParsedFile:
     """
     text = data.decode("utf-8-sig", errors="replace")
     errors, warnings, shots, control, null_points = [], [], [], [], []
-    units = None
+    units, job = None, ""
     for row in csv.reader(io.StringIO(text)):
         row = [c.strip() for c in row]
         if not row or not any(row):
@@ -137,6 +142,8 @@ def parse_trimble_csv(data: bytes) -> ParsedFile:
         if joined.lower().startswith("job:") or "units:" in joined.lower():
             m = re.search(r"Units:\s*([A-Za-z]+)", joined)
             units = m.group(1) if m else units
+            j = re.search(r"Job:\s*([^,]*)", joined)
+            job = j.group(1).strip() if j else job
             continue
         name = row[0]
         coords = [_float(c) for c in row[1:4]]
@@ -168,7 +175,7 @@ def parse_trimble_csv(data: bytes) -> ParsedFile:
             "every point recomputes.")
     if not shots and not null_points:
         errors.append("No pipe shots found in the CSV.")
-    return ParsedFile(shots, control, units, errors, warnings)
+    return ParsedFile(shots, control, units, errors, warnings, job)
 
 
 def control_check(control: list) -> list:
@@ -311,9 +318,9 @@ def review_names(shots: list) -> list:
             else:
                 s.suggestion = s.raw_name
 
-    counters = Counter(s.counter for s in shots if s.counter is not None)
+    counters = Counter((s.profile, s.counter) for s in shots if s.counter is not None)
     for s in shots:
-        if s.counter is not None and counters[s.counter] > 1:
+        if s.counter is not None and counters[(s.profile, s.counter)] > 1:
             s.flags.append(f"Shot number {s.counter:04d} is used more than once")
         if s.profile is None:
             s.flags.append("Couldn't tell which profile this shot belongs to")
@@ -390,7 +397,8 @@ def build_profile(shots: list, final_names: dict, profile: int,
             if s.profile == profile:
                 errors.append(f"'{name}' still isn't a valid shot name (e.g. 3' U/S GW 24500 0001).")
             continue
-        if counter // 1000 != profile:
+        shot_profile = s.profile_override if s.profile_override is not None else counter // 1000
+        if shot_profile != profile:
             continue
         s.counter = counter
         groups.setdefault(station, []).append(s)
@@ -701,7 +709,7 @@ def merge_parsed(files: list) -> ParsedFile:
         units = units or f.units
         control += f.control
         for s in f.shots:
-            key = (s.raw_name.strip(), round(s.n, 4), round(s.e, 4), round(s.z, 4))
+            key = (s.profile_override, s.raw_name.strip(), round(s.n, 4), round(s.e, 4), round(s.z, 4))
             if key in seen:
                 continue
             seen.add(key)
@@ -903,3 +911,26 @@ def dates_in_names(control: list) -> list:
             if d:
                 found.add(d)
     return sorted(found)
+
+
+
+# ---------------------------------------------------------------------------
+# One file per profile (jobs split by profile) or one file with every profile
+# ---------------------------------------------------------------------------
+PROFILE_RE = re.compile(r"profile[\s_#-]*(\d)", re.I)
+
+
+def detect_file_profile(parsed: ParsedFile, filename: str = "") -> Optional[int]:
+    """The profile a whole file belongs to when its job or file name says so
+    ("... Profile 1"). None means: read it from each shot's number (0001/1001/2001)."""
+    for text in (parsed.job, filename):
+        m = PROFILE_RE.search(text or "")
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def apply_file_profile(parsed: ParsedFile, profile: Optional[int]) -> ParsedFile:
+    for s in parsed.shots:
+        s.profile_override = profile
+    return parsed
