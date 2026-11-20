@@ -10,7 +10,15 @@ import zipfile
 import pandas as pd
 import streamlit as st
 
+import importlib
+
 import engine
+import xlsx_patch
+
+# Streamlit Cloud can keep an older copy of these modules in memory after the repo
+# updates while running the new app.py. Reload them every run so they always match.
+xlsx_patch = importlib.reload(xlsx_patch)
+engine = importlib.reload(engine)
 
 st.set_page_config(page_title="Laser Consistency / Pipe Movement", layout="wide")
 st.title("Laser Consistency Check & Pipe Movement Generator")
