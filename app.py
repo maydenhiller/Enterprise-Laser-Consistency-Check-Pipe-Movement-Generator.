@@ -189,7 +189,12 @@ for p, tab in zip(profiles, tabs):
                 else:
                     st.write("All shot names read cleanly.")
 
-        build = engine.build_profile(parsed.shots, final, p, order)
+        keep_odd = st.checkbox(
+            "Keep shots with an elevation far off the others at their station",
+            key=f"keep_odd_{p}",
+            help="Off: a shot more than 0.25 ft off the other shot(s) at its station "
+                 "(usually a wrong target height) is left out. On: every shot is averaged in.")
+        build = engine.build_profile(parsed.shots, final, p, order, keep_odd)
         if build.errors:
             for e in build.errors:
                 st.error(e)

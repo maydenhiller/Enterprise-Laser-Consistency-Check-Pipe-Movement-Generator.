@@ -30,7 +30,7 @@ from xlsx_patch import XlsxPatcher, column_letters
 
 # Bump whenever parsing or the Workbook/ParsedFile shape changes: the app passes it into
 # its cached loaders so Streamlit never serves objects built by older code.
-ENGINE_VERSION = 10
+ENGINE_VERSION = 11
 
 CONSISTENCY_SHEET = "Robotic Raw Data Input"
 MOVEMENT_SHEET = "Robotic Raw Data Average Input"
@@ -378,7 +378,7 @@ class ProfileBuild:
 
 
 def build_profile(shots: list, final_names: dict, profile: int,
-                  order: Optional[list] = None) -> ProfileBuild:
+                  order: Optional[list] = None, keep_height_outliers: bool = False) -> ProfileBuild:
     """Group the profile's shots by their confirmed names (shot index -> name)."""
     errors, warnings, groups = [], [], {}
     for s in shots:
@@ -425,6 +425,11 @@ def build_profile(shots: list, final_names: dict, profile: int,
         return zs[len(zs) // 2]
     for i, st in enumerate(stations):
         if len(st.shots) < 2 or max(x.z for x in st.shots) - min(x.z for x in st.shots) <= 0.25:
+            continue
+        if keep_height_outliers:
+            warnings.append(f"{st.station_id}: shots differ in elevation by "
+                            f"{max(x.z for x in st.shots) - min(x.z for x in st.shots):.2f} ft "
+                            "(kept, as chosen) - the average there is pulled off the pipe line.")
             continue
         near = [mid_z(stations[j]) for j in (i - 1, i + 1) if 0 <= j < len(stations)]
         expected = sum(near) / len(near) if near else mid_z(st)
