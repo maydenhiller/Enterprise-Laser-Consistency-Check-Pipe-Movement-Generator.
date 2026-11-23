@@ -247,6 +247,8 @@ for p, tab in zip(profiles, tabs):
             help="Off: a shot more than 0.25 ft off the other shot(s) at its station "
                  "(usually a wrong target height) is left out. On: every shot is averaged in.")
         build = engine.build_profile(parsed.shots, final, p, order, keep_odd)
+        for note in engine.cross_file_check(parsed.shots, final, p):
+            (st.warning if "won't" in note else st.caption)(note)
         if build.errors:
             for e in build.errors:
                 st.error(e)

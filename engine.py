@@ -30,7 +30,7 @@ from xlsx_patch import XlsxPatcher, column_letters
 
 # Bump whenever parsing or the Workbook/ParsedFile shape changes: the app passes it into
 # its cached loaders so Streamlit never serves objects built by older code.
-ENGINE_VERSION = 13
+ENGINE_VERSION = 14
 
 CONSISTENCY_SHEET = "Robotic Raw Data Input"
 MOVEMENT_SHEET = "Robotic Raw Data Average Input"
@@ -72,6 +72,7 @@ class Shot:
         return (self.n, self.e, self.z)
 
     profile_override: Optional[int] = None   # set when a whole file is one profile
+    source: int = 0                          # which uploaded CSV the shot came from
 
     @property
     def profile(self) -> Optional[int]:
@@ -203,8 +204,8 @@ def _guess_counters(shots: list) -> None:
         if s.counter is not None:
             s.guess_counter = s.counter
             continue
-        before = [v for v in valid if v.index < s.index]
-        after = [v for v in valid if v.index > s.index]
+        before = [v for v in valid if v.index < s.index and v.source == s.source]
+        after = [v for v in valid if v.index > s.index and v.source == s.source]
         g_before = before[-1].counter + (s.index - before[-1].index) if before else None
         g_after = after[0].counter - (after[0].index - s.index) if after else None
         if g_before is not None and g_after is not None and g_before // 1000 != g_after // 1000:
@@ -318,9 +319,9 @@ def review_names(shots: list) -> list:
             else:
                 s.suggestion = s.raw_name
 
-    counters = Counter((s.profile, s.counter) for s in shots if s.counter is not None)
+    counters = Counter((s.source, s.profile, s.counter) for s in shots if s.counter is not None)
     for s in shots:
-        if s.counter is not None and counters[(s.profile, s.counter)] > 1:
+        if s.counter is not None and counters[(s.source, s.profile, s.counter)] > 1:
             s.flags.append(f"Shot number {s.counter:04d} is used more than once")
         if s.profile is None:
             s.flags.append("Couldn't tell which profile this shot belongs to")
@@ -703,7 +704,7 @@ def merge_parsed(files: list) -> ParsedFile:
     than one export; exact repeats (same name and coordinates) are kept once."""
     shots, control, errors, warnings, seen = [], [], [], [], set()
     units = None
-    for f in files:
+    for source, f in enumerate(files):
         errors += f.errors
         warnings += f.warnings
         units = units or f.units
@@ -714,6 +715,7 @@ def merge_parsed(files: list) -> ParsedFile:
                 continue
             seen.add(key)
             s.index = len(shots)
+            s.source = source
             s.flags, s.suggestion, s.cluster, s.guess_counter = [], None, None, None
             shots.append(s)
     if shots:
@@ -934,3 +936,36 @@ def apply_file_profile(parsed: ParsedFile, profile: Optional[int]) -> ParsedFile
     for s in parsed.shots:
         s.profile_override = profile
     return parsed
+
+
+
+def cross_file_check(shots: list, names: dict, profile: int) -> list:
+    """When one profile comes from more than one CSV (two data collectors, two setups),
+    the files must share a coordinate frame: same benchmark at 0,0,0 and the same
+    backsight at azimuth 0. Stations shot in both files show whether they do."""
+    by = {}
+    for s in shots:
+        if s.profile != profile or names.get(s.index) is None:
+            continue
+        station = parse_name(names[s.index])[0]
+        if station:
+            by.setdefault(station, {}).setdefault(s.source, []).append(s.xyz)
+    sources = {s.source for s in shots if s.profile == profile}
+    if len(sources) < 2:
+        return []
+    gaps = []
+    for station, per in by.items():
+        if len(per) > 1:
+            cen = [tuple(sum(c) / len(v) for c in zip(*v)) for v in per.values()]
+            gaps.append((station, max(math.dist(a, b) for a in cen for b in cen)))
+    if not gaps:
+        return [f"Profile {profile} comes from {len(sources)} CSVs with no station shot in both, "
+                "so the app can't check they share a coordinate frame. Both crews must set up on "
+                "the same benchmark (0,0,0) and backsight (azimuth 0), or the halves won't line up."]
+    worst = max(gaps, key=lambda g: g[1])
+    if worst[1] > 0.25:
+        return [f"Profile {profile}: the CSVs disagree by up to {worst[1]:.2f} ft at stations shot in "
+                f"both (worst: {worst[0]}). They look like different coordinate frames (different "
+                "benchmark, backsight or azimuth) - the profile won't be right until they match."]
+    return [f"Profile {profile} combines {len(sources)} CSVs; stations shot in both agree within "
+            f"{worst[1] * 12:.2f} in, so they share a coordinate frame."]

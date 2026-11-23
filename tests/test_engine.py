@@ -212,3 +212,29 @@ def test_one_file_per_profile_numbered_from_0001():
     b1 = engine.build_profile(merged.shots, names, 1)
     assert len(b0.stations) == len(b1.stations) == 15
     assert abs(b1.stations[0].average[2] - b0.stations[0].average[2] + 0.04) < 1e-9
+
+
+def test_two_collectors_same_profile():
+    first = engine.parse_trimble_csv(csv_bytes(_pass(1, LABELS[:8]), _pass(9, LABELS[:8])))
+    rows = [HEADER, "bm,0,0,0"]
+    for p, start in ((0, 1), (1, 10)):
+        for i, lab in enumerate(LABELS[6:]):
+            k = i + 6
+            rows.append(f"{lab} {start + i:04d},{8 + 0.4 * k + 0.002 * p:.3f},{-18 - 0.92 * k:.3f},{-1.9 + 0.1 * k:.3f}")
+    second = engine.parse_trimble_csv("\n".join(rows).encode())
+    merged = engine.merge_parsed([first, second])
+    engine.review_names(merged.shots)
+    assert not any(s.flags for s in merged.shots)       # both start at 0001: not a problem
+    names = {s.index: s.suggestion for s in merged.shots}
+    build = engine.build_profile(merged.shots, names, 0)
+    assert len(build.stations) == 15 and not build.errors
+    assert "share a coordinate frame" in engine.cross_file_check(merged.shots, names, 0)[0]
+    # second crew in another frame: shifted 2 ft
+    shifted = "\n".join(r if not r[0].isdigit() else
+                        ",".join([r.split(",")[0], str(float(r.split(",")[1]) + 2)] + r.split(",")[2:])
+                        for r in rows).encode()
+    merged = engine.merge_parsed([engine.parse_trimble_csv(csv_bytes(_pass(1, LABELS[:8]), _pass(9, LABELS[:8]))),
+                                  engine.parse_trimble_csv(shifted)])
+    engine.review_names(merged.shots)
+    names = {s.index: s.suggestion for s in merged.shots}
+    assert "different coordinate frames" in engine.cross_file_check(merged.shots, names, 0)[0]
