@@ -26,11 +26,11 @@ st.caption("One dig per run. Best run on site after each profile, so a 3rd round
            "while the robot is still set up. Never insert or delete rows in the workbooks.")
 
 # Pipe surface choices, matching the As-Built builder's lists.
-EXISTING = ["Coal Tar", "Polyken Tape"]
+EXISTING = ["Polyken Tape", "Coal Tar", "RD6 Transition Tape"]
 REPAIR = ["PROTAL-7200", "DENSO 7200", "SPC 4888", "SPC 2831", "Aquawrap"]
-SLEEVES = ["Petro Sleeve", "B Sleeve"]
+SLEEVES = ["Petro Sleeve", "B Sleeve", "Metal Band"]
 SURFACES = ["Bare pipe"] + EXISTING + REPAIR + SLEEVES + ["Other"]
-DEFAULT_SURFACE = {0: "Coal Tar", 1: "Bare pipe", 2: "PROTAL-7200", 3: "PROTAL-7200"}
+DEFAULT_SURFACE = {0: "Polyken Tape", 1: "Bare pipe", 2: "PROTAL-7200", 3: "PROTAL-7200"}
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 

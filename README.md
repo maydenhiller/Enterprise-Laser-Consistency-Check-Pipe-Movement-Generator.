@@ -23,8 +23,8 @@ This app fills the measurement area, Exposed Length when it's blank, and Technic
    layers: one choice for everywhere, **ranges** (From station / To station / surface /
    thickness, one row per stretch such as a sleeve or tape cut; later rows win), then
    single-station changes in the full table. The downloads sit below the tabs. Choices match the As-Built builder - Bare pipe; existing coating
-   Coal Tar, Polyken Tape; repair coating PROTAL-7200, DENSO 7200, SPC 4888, SPC 2831,
-   Aquawrap; Petro Sleeve, B Sleeve; Other. Defaults: Profile 0 Coal Tar, Profile 1 Bare
+   Polyken Tape, Coal Tar, RD6 Transition Tape; repair coating PROTAL-7200, DENSO 7200, SPC 4888, SPC 2831,
+   Aquawrap; Petro Sleeve, B Sleeve, Metal Band; Other. Defaults: Profile 0 Polyken Tape, Profile 1 Bare
    pipe, Profile 2 PROTAL-7200. Bare pipe writes 0; the weld station gets "GW" in its notes;
    'no BS' in Other notes leaves a station out of the bending strain. Blank thickness warns
    and is treated as 0. Both shots at a station share one entry (the workbook copies #1's
