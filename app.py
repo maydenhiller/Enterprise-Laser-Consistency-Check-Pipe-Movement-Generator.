@@ -40,9 +40,9 @@ def read_csv(data: bytes, version: int):
 
 
 @st.cache_data(show_spinner=False)
-def load_csvs(blobs: tuple, profiles: tuple, align: bool, version: int):
-    files = [engine.apply_file_profile(engine.parse_trimble_csv(b), p)
-             for b, p in zip(blobs, profiles)]
+def load_csvs(blobs: tuple, profiles: tuple, later: tuple, align: bool, version: int):
+    files = [engine.apply_coded_block(engine.apply_file_profile(engine.parse_trimble_csv(b), p), q)
+             for b, p, q in zip(blobs, profiles, later)]
     merged = engine.merge_parsed(files, align)
     engine.review_names(merged.shots)
     return merged
@@ -104,8 +104,26 @@ if offsets:
                         help="Shifts every shot in the other file(s) by the backsight "
                              "difference. The better fix is the instrument/target height on "
                              "the data collector, then re-export.")
-parsed = load_csvs(tuple(f.getvalue() for f in csv_files), tuple(file_profiles), align,
-                   engine.ENGINE_VERSION)
+# A later profile shot into the same job and numbered on from Profile 0 (0117... not
+# 2001...): the block of shots carrying a coating code is split off as its own profile.
+later_profiles = []
+for i, f in enumerate(csv_files):
+    found = engine.coded_block(read_csv(f.getvalue(), engine.ENGINE_VERSION))
+    if found and file_profiles[i] is None:
+        start, block, guess = found
+        opts = [1, 2, 3, 0]
+        pick = st.selectbox(
+            f"{f.name}: shots {start:04d}–{max(s.counter for s in block):04d} ({len(block)} shots) "
+            "have a coating recorded and are numbered like Profile 0. Which profile are they?",
+            opts, index=opts.index(guess), key=f"later_{i}_{f.name}",
+            format_func=lambda c: "Profile 0 (a 3rd measurement)" if c == 0 else f"Profile {c}",
+            help="Guessed from the codes: repair coating (7200, RD6) means after recoat = "
+                 "Profile 2; only bare pipe or sleeves = Profile 1.")
+        later_profiles.append(pick or None)
+    else:
+        later_profiles.append(None)
+parsed = load_csvs(tuple(f.getvalue() for f in csv_files), tuple(file_profiles),
+                   tuple(later_profiles), align, engine.ENGINE_VERSION)
 stop = False
 for e in parsed.errors:
     st.error(e)

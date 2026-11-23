@@ -30,7 +30,7 @@ from xlsx_patch import XlsxPatcher, column_letters
 
 # Bump whenever parsing or the Workbook/ParsedFile shape changes: the app passes it into
 # its cached loaders so Streamlit never serves objects built by older code.
-ENGINE_VERSION = 22
+ENGINE_VERSION = 24
 
 CONSISTENCY_SHEET = "Robotic Raw Data Input"
 MOVEMENT_SHEET = "Robotic Raw Data Average Input"
@@ -42,8 +42,9 @@ ALLOWED_UNITS = ("USSURVEYFEET",)
 
 NAME_RE = re.compile(r"^(?P<station>.*?)\s+(?P<counter>\d{4})$")
 STATION_RE = re.compile(
-    r"^(?:(?P<dist>\d+(?:\.\d+)?)\s*'+\s*)?(?:(?P<dir>[UD])\s*/?\s*S\s+(?:OF\s+)?)?GW\s*#?\s*(?P<gw>\d+)$",
+    r"^(?:(?P<dist>\d+(?:\.\d+)?)\s*'*\s*)?(?:(?P<dir>[UD])\s*/?\s*S\s+(?:OF\s+)?)?GW\s*#?\s*(?P<gw>\d+)$",
     re.I)
+SKIP_RE = re.compile(r"\b(DON'?T|DO\s+NOT)\s+USE\b|\bDELETE\b", re.I)
 CONTROL_RE = re.compile(r"\b(BM|BS|BENCH\s*MARK|BACK\s*SIGHT|CHECK)\d*\b|\bDO NOT USE\b", re.I)
 
 
@@ -73,6 +74,7 @@ class Shot:
 
     profile_override: Optional[int] = None   # set when a whole file is one profile
     source: int = 0                          # which uploaded CSV the shot came from
+    code: str = ""                           # Trimble code column (crews type the coating here)
 
     @property
     def profile(self) -> Optional[int]:
@@ -110,11 +112,35 @@ def canonical_station(text: str):
     return label, gw, dist, side
 
 
+# Words crews add to a shot name that aren't part of the station (coatings, notes).
+NOTE_WORDS_RE = re.compile(
+    r"\b(B\s*SLEEVE|PETRO(\s*SLEEVE)?|OVERLAY|O/?L|RD-?6|POLY(KEN)?|COAL\s*TAR|BARE(\s*PIPE)?|"
+    r"ON\s+EXIST.*|EXIST(ING)?|7200|SLEEVE)\b", re.I)
+
+
+def _clean_station_text(text: str) -> str:
+    text = re.sub(r"\bU/W\b", "U/S GW", text, flags=re.I)       # "3' U/W 3129000" typo
+    text = re.sub(r"\bD/W\b", "D/S GW", text, flags=re.I)
+    text = NOTE_WORDS_RE.sub(" ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def parse_name(name: str):
-    """(station, counter, gw, dist, side) with None where the name doesn't parse."""
+    """(station, counter, gw, dist, side) with None where the name doesn't parse.
+
+    The shot number is the last stand-alone 4-digit group, so notes typed before or after it
+    ("63' D/S GW 3126000 B Sleeve 0044", "48 D/S GW 3129000 0018 on exist RD-6") still read."""
     m = NAME_RE.match(name.strip())
-    station_text, counter = (m.group("station"), int(m.group("counter"))) if m else (name, None)
-    found = canonical_station(station_text)
+    if m:
+        station_text, counter = m.group("station"), int(m.group("counter"))
+    else:
+        tokens = list(re.finditer(r"(?<![\d.])(\d{4})(?![\d.])", name))
+        if tokens:
+            last = tokens[-1]
+            station_text, counter = name[:last.start()], int(last.group(1))
+        else:
+            station_text, counter = name, None
+    found = canonical_station(station_text) or canonical_station(_clean_station_text(station_text))
     if found:
         return found[0], counter, found[1], found[2], found[3]
     return None, counter, None, None, None
@@ -133,7 +159,7 @@ def parse_trimble_csv(data: bytes) -> ParsedFile:
     Also accepts the hand-sorted layout (Name, Station ID, Measurement ID, N, E, Elev).
     """
     text = data.decode("utf-8-sig", errors="replace")
-    errors, warnings, shots, control, null_points = [], [], [], [], []
+    errors, warnings, shots, control, null_points, skipped = [], [], [], [], [], []
     units, job = None, ""
     for row in csv.reader(io.StringIO(text)):
         row = [c.strip() for c in row]
@@ -153,19 +179,34 @@ def parse_trimble_csv(data: bytes) -> ParsedFile:
         if any(str(c).strip() == "?" for c in row[1:4]):
             null_points.append(name)
             continue
+        if SKIP_RE.search(name):
+            skipped.append(f"{name} (marked as not to use)")
+            continue
+        if re.fullmatch(r"auto\d+", name.strip(), re.I):
+            skipped.append(f"{name} (auto-named point, not a labeled pipe shot)")
+            continue
         if None in coords or not name:
             warnings.append(f"Skipped a line that isn't a point: {joined[:60]}")
             continue
         n, e, z = coords
-        if CONTROL_RE.search(name) or (n == 0 and e == 0 and z == 0):
+        if n == 0 and e == 0 and z == 0 or CONTROL_RE.search(name) and not SKIP_RE.search(name):
             control.append((name, n, e, z))
             continue
         station, counter, gw, dist, side = parse_name(name)
-        shots.append(Shot(len(shots), name, n, e, z, station, counter, gw, dist, side))
+        shot = Shot(len(shots), name, n, e, z, station, counter, gw, dist, side)
+        shot.code = row[4].strip() if len(row) > 4 else ""
+        shots.append(shot)
     if units and units.upper() not in ALLOWED_UNITS:
         errors.append(f"Job units are '{units}'. Jobs must be US Survey Feet.")
     if units is None:
         warnings.append("No 'Units:' header line found - assuming US Survey Feet.")
+    if skipped:
+        warnings.append("Left out: " + "; ".join(skipped) + ".")
+    if null_points and shots:
+        warnings.append(f"Left out {len(null_points)} shot(s) with no coordinates ('?' in the "
+                        f"export): {', '.join(null_points[:6])}{'...' if len(null_points) > 6 else ''}. "
+                        "The robot didn't get a measurement on them.")
+        null_points = []
     if null_points:
         errors.append(
             f"{len(null_points)} point(s) have no coordinates ('?' in the export), starting with "
@@ -1177,3 +1218,41 @@ def frame_check(stations: list, book: Optional[Workbook], profile: int,
                            "backsight stake was likely disturbed between setups.")
     return "ok", (f"Profile {profile} lines up with Profile 0's setup (turned {deg:+.2f}°, "
                   f"shifted {shift_in:.1f} in overall).")
+
+
+
+# ---------------------------------------------------------------------------
+# A later profile numbered as Profile 0 (shots 0117... instead of 2001...)
+# ---------------------------------------------------------------------------
+REPAIR_CODE_RE = re.compile(r"7200|RD-?6|PROTAL|DENSO|SPC|AQUA", re.I)
+
+
+def coded_block(parsed: ParsedFile):
+    """(first shot number, shots, suggested profile) for a block of shots at the end of a
+    file that carry a coating in the Code column (or in the name), when the file's shot
+    numbers don't carry the profile digit. None when there's no such block.
+
+    Crews record the coating per shot once the pipe has been repaired, so that block is a
+    later profile: 2 when the codes show repair coating (7200, RD6...), else 1."""
+    shots = [s for s in parsed.shots if s.counter is not None]
+    if not shots or any(s.counter >= 1000 for s in shots):
+        return None
+
+    def coded(s):
+        return bool(s.code) or bool(REPAIR_CODE_RE.search(s.raw_name))
+    starts = sorted({s.counter for s in shots if coded(s)})
+    for c in starts:
+        block = [s for s in shots if s.counter >= c]
+        if len(block) >= 5 and sum(coded(s) for s in block) >= 0.8 * len(block) \
+                and len(block) < len(shots):
+            texts = " ".join(s.code + " " + s.raw_name for s in block)
+            return c, block, 2 if REPAIR_CODE_RE.search(texts) else 1
+    return None
+
+
+def apply_coded_block(parsed: ParsedFile, profile: Optional[int]) -> ParsedFile:
+    found = coded_block(parsed)
+    if found and profile:
+        for s in found[1]:
+            s.profile_override = profile
+    return parsed
