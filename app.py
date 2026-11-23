@@ -173,7 +173,7 @@ for label, book in [(f.name, b) for f, b in books.values()] + \
 if stop:
     st.stop()
 for w in parsed.warnings:
-    st.caption(w)
+    (st.warning if w.startswith("FLAG") else st.caption)(w)
 for note in engine.control_check(parsed.control):
     st.warning(note)
 
