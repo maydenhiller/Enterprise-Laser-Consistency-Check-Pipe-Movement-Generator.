@@ -30,7 +30,7 @@ from xlsx_patch import XlsxPatcher, column_letters
 
 # Bump whenever parsing or the Workbook/ParsedFile shape changes: the app passes it into
 # its cached loaders so Streamlit never serves objects built by older code.
-ENGINE_VERSION = 19
+ENGINE_VERSION = 20
 
 CONSISTENCY_SHEET = "Robotic Raw Data Input"
 MOVEMENT_SHEET = "Robotic Raw Data Average Input"
@@ -620,7 +620,7 @@ def fill_consistency(book: Workbook, stations: list, exposed_length: Optional[fl
                          U=st.notes or 0, V=st.thickness or 0, W=avg[0], X=avg[1], Y=avg[2])
         values.update({f"{c}{r}": v for c, v in cols.items()})
         cached.update({f"{c}{r}": v for c, v in cache.items()})
-    if exposed_length is not None and book.header["Exposed Length (ft)"] in (None, "", "xx"):
+    if exposed_length is not None:            # always this profile's first-to-last station
         values["L4"] = exposed_length
     if technician:
         values["L3"] = technician
@@ -658,7 +658,10 @@ def fill_movement(book: Workbook, profile: int, stations: list, missing: list,
         elif key in missing:
             block[1] = COVERED_NOTE.format(p=profile)
         values.update({f"{c}{r}": v for c, v in zip(cols, block)})
-    if exposed_length is not None and book.header["Exposed Length (ft)"] in (None, "", "xx"):
+    # Exposed length = first to last station. Profile 0 sets the station list, so its
+    # length is always written; a later profile only fills it in if the file has none.
+    if exposed_length is not None and (profile == 0 or book.header["Exposed Length (ft)"]
+                                       in (None, "", "xx")):
         values["L4"] = exposed_length
     if technician:
         values["L3"] = technician

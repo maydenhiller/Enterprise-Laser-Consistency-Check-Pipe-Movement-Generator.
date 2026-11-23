@@ -278,3 +278,19 @@ def test_frame_check_catches_azimuth_change():
     b0, b1 = _profiles_with_turn(1.0)
     level, _ = engine.frame_check(b1.stations, _Book(b0.stations, False), 1, False)
     assert level == "warning"
+
+
+def test_exposed_length_is_rewritten_not_kept():
+    import os, glob
+    blank = sorted(glob.glob("/mnt/user-data/uploads/*Laser_Consistency_Check_Dig_01A_Profile_0.xlsx"))
+    if not blank:          # templates aren't in the repo; this runs where they're available
+        return
+    from xlsx_patch import XlsxPatcher
+    p = XlsxPatcher(open(blank[0], "rb").read())
+    p.set_values(engine.CONSISTENCY_SHEET, {"L4": 63.31})
+    book = engine.read_workbook(p.to_bytes())
+    parsed = engine.parse_trimble_csv(csv_bytes(_pass(1, LABELS), _pass(16, LABELS)))
+    engine.review_names(parsed.shots)
+    build = engine.build_profile(parsed.shots, {s.index: s.suggestion for s in parsed.shots}, 0)
+    out = engine.read_workbook(engine.fill_consistency(book, build.stations, build.exposed_length))
+    assert out.header["Exposed Length (ft)"] == build.exposed_length != 63.31
