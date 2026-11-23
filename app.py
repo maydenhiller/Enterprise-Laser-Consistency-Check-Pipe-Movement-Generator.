@@ -425,6 +425,10 @@ for p in profiles:
     for s in r["build"].stations:
         s.west_positive = west_positive
     stations, missing, extra = engine.order_stations(r["build"], current_mv)
+    if current_mv is not None and p > 0 and engine.movement_has_profile(current_mv, 0):
+        level, text = engine.frame_check(stations, current_mv, p, west_positive)
+        if level:
+            notes.append(({"error": "error", "warning": "warning", "ok": "caption"}[level], text))
     try:
         outputs[r["cc_name"].name] = engine.fill_consistency(r["cc"], stations,
                                                              r["build"].exposed_length,

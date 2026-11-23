@@ -238,3 +238,43 @@ def test_two_collectors_same_profile():
     engine.review_names(merged.shots)
     names = {s.index: s.suggestion for s in merged.shots}
     assert "different coordinate frames" in engine.cross_file_check(merged.shots, names, 0)[0]
+
+
+def _profiles_with_turn(degrees):
+    import math
+    rows = [HEADER, "bm,0,0,0"]
+    c, s = math.cos(math.radians(degrees)), math.sin(math.radians(degrees))
+    for prof, base in ((0, 1), (1, 1001)):
+        k = 0
+        for p_ in range(2):
+            for i, lab in enumerate(LABELS):
+                n, e = 8 + 0.4 * i + 0.002 * p_, -18 - 0.92 * i
+                if prof == 1:
+                    n, e = n * c - e * s, n * s + e * c
+                rows.append(f"{lab} {base + k:04d},{n:.3f},{e:.3f},{-1.9 + 0.1 * i:.3f}")
+                k += 1
+    parsed = engine.parse_trimble_csv("\n".join(rows).encode())
+    engine.review_names(parsed.shots)
+    names = {s.index: s.suggestion for s in parsed.shots}
+    return engine.build_profile(parsed.shots, names, 0), engine.build_profile(parsed.shots, names, 1)
+
+
+class _Book:                                  # just the parts frame_check reads
+    def __init__(self, stations, west_positive):
+        self.rows = []
+        for st in stations:
+            n, e, z = (sum(c) / len(st.shots) for c in zip(*[x.xyz for x in st.shots]))
+            self.rows.append([st.station_id, None, None, None, n, -e if west_positive else e, z]
+                             + [None] * 18)
+
+
+def test_frame_check_catches_azimuth_change():
+    b0, b1 = _profiles_with_turn(90)
+    level, text = engine.frame_check(b1.stations, _Book(b0.stations, True), 1, True)
+    assert level == "error" and "+90.0" in text
+    b0, b1 = _profiles_with_turn(0)
+    level, _ = engine.frame_check(b1.stations, _Book(b0.stations, True), 1, True)
+    assert level == "ok"
+    b0, b1 = _profiles_with_turn(1.0)
+    level, _ = engine.frame_check(b1.stations, _Book(b0.stations, False), 1, False)
+    assert level == "warning"

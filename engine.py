@@ -30,7 +30,7 @@ from xlsx_patch import XlsxPatcher, column_letters
 
 # Bump whenever parsing or the Workbook/ParsedFile shape changes: the app passes it into
 # its cached loaders so Streamlit never serves objects built by older code.
-ENGINE_VERSION = 18
+ENGINE_VERSION = 19
 
 CONSISTENCY_SHEET = "Robotic Raw Data Input"
 MOVEMENT_SHEET = "Robotic Raw Data Average Input"
@@ -1065,3 +1065,57 @@ def snap_to_stations(spots: list, rows: list) -> int:
 def shot_number(x) -> str:
     n = x.counter if x.counter is not None else x.guess_counter
     return f"{n:04d}" if n is not None else "?"
+
+
+
+# ---------------------------------------------------------------------------
+# Same coordinate frame as Profile 0? (azimuth 90 vs 0, disturbed stakes)
+# ---------------------------------------------------------------------------
+def frame_check(stations: list, book: Optional[Workbook], profile: int,
+                west_positive: bool) -> tuple:
+    """Compare a later profile with Profile 0 in the Pipe Movement file.
+
+    Both setups put the benchmark at 0,0, so a different backsight azimuth shows up as the
+    whole profile turned about 0,0, and a disturbed stake as the whole profile shifted.
+    Returns (level, message): level is "error", "warning" or "ok", or (None, "") when there
+    is nothing to compare."""
+    if book is None or profile == 0:
+        return None, ""
+    p0 = {}
+    for r in book.rows:
+        if r[0] and isinstance(r[4], (int, float)) and isinstance(r[5], (int, float)):
+            p0[str(r[0]).strip()] = (r[4], -r[5] if west_positive else r[5])
+    pairs = []
+    for st in stations:
+        if st.station_id in p0:
+            n = sum(x.n for x in st.shots) / len(st.shots)
+            e = sum(x.e for x in st.shots) / len(st.shots)
+            pairs.append((p0[st.station_id], (n, e)))
+    if len(pairs) < 3:
+        return None, ""
+    cross = sum(a[0] * b[1] - a[1] * b[0] for a, b in pairs)
+    dot = sum(a[0] * b[0] + a[1] * b[1] for a, b in pairs)
+    theta = math.atan2(cross, dot)                      # turn from Profile 0 to this profile
+    c, s_ = math.cos(-theta), math.sin(-theta)
+    back = [((b[0] * c - b[1] * s_), (b[0] * s_ + b[1] * c)) for _, b in pairs]
+    shift = [sum(q[i] - a[i] for (a, _), q in zip(pairs, back)) / len(pairs) for i in (0, 1)]
+    shift_in = math.hypot(*shift) * 12
+    reach = max(math.hypot(*b) for _, b in pairs)
+    turn_in = abs(theta) * reach * 12                   # false movement at the far station
+    deg = math.degrees(theta)
+    if abs(deg) >= 5:
+        return "error", (f"Profile {profile} is turned {deg:+.1f}° from Profile 0 about the "
+                         "benchmark. The two setups used different backsight azimuths (for "
+                         "example 90 on one and 0 on the other), so the pipe movement for this "
+                         "profile isn't real. Every profile on a dig has to use the same "
+                         "azimuth, benchmark and backsight.")
+    if abs(deg) >= 0.5:
+        return "warning", (f"Profile {profile} is turned {deg:+.2f}° from Profile 0, which alone "
+                           f"accounts for up to {turn_in:.1f} in of apparent movement at the far "
+                           "station. Check the backsight azimuth and stake.")
+    if shift_in > 3:
+        return "warning", (f"Profile {profile} sits {shift_in:.1f} in off Profile 0 as a whole. "
+                           "If the pipe didn't move that much everywhere, the benchmark or "
+                           "backsight stake was likely disturbed between setups.")
+    return "ok", (f"Profile {profile} lines up with Profile 0's setup (turned {deg:+.2f}°, "
+                  f"shifted {shift_in:.1f} in overall).")

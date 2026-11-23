@@ -43,6 +43,16 @@ This app fills the measurement area, Exposed Length when it's blank, and Technic
    0.20" limit, a chart, and an on-site preview of max deflection and fitted strain. Failures
    warn; they don't block the download.
 
+## Same setup on every profile
+Profile 1 and 2 are compared with Profile 0 in the Pipe Movement file. Both setups put the
+benchmark at 0,0, so a different backsight azimuth shows up as the whole profile turned
+about 0,0, and a disturbed stake as the whole profile shifted:
+- turned 5° or more: error - different azimuths (e.g. 90 vs 0); that profile's movement isn't real
+- turned 0.5°-5°: warning, with how much false movement the turn causes
+- shifted more than 3 in overall: warning - benchmark or backsight stake likely disturbed
+- otherwise a note that it lines up
+Digs started at azimuth 90 must finish every profile at 90; outputs are the same either way.
+
 ## Y direction
 Enterprise: +X north (downstream), **+Y west**, +Z up. Trimble's Easting is east-positive,
 so the app writes **Y = -Easting**. If an uploaded Pipe Movement file already holds data
