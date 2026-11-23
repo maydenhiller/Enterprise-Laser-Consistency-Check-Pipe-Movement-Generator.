@@ -202,18 +202,16 @@ for p, tab in zip(profiles, tabs):
                              "measured it, counting marks from the weld. Field labels: the "
                              "names the crew typed, with obvious typos fixed.")
         if mode == modes[0]:
-            suggested, agree = engine.suggest_shift(parsed.shots, p)
-            shift = st.number_input(
-                "Weld offset (ft): how far downstream of the shots labeled 'GW' the weld "
-                "really is", value=float(suggested), step=0.5, format="%.2f",
-                key=f"shift_{p}_{suggested}",
-                help="0 if the GW shots were taken on the weld. Set automatically when most "
-                     "field labels sit a whole mark off the measured positions.")
-            if suggested:
-                st.warning(f"Most field labels sit {suggested:.2f} ft off the measured "
-                           "positions, so the weld offset was set to that: the shots labeled "
-                           "'GW' look like they were taken one mark away from the weld. Set it "
-                           "to 0 if they really were on the weld.")
+            # The GW shot is always taken on the weld, so stations are measured straight
+            # from it. Labels that sit a whole mark off the measured positions are only
+            # reported, never used to move the weld.
+            shift = 0.0
+            off, _ = engine.suggest_shift(parsed.shots, p)
+            if off:
+                st.warning(f"Most field labels sit {abs(off):.2f} ft "
+                           f"{'downstream' if off > 0 else 'upstream'} of where the robot measured "
+                           "those shots. Stations are named from the GW shot as the weld; check "
+                           "that the shots labeled 'GW' were really taken on the weld.")
             spots, gw_number, layout_notes = engine.position_layout(parsed.shots, p, shift, keep_odd)
             earlier = [q for q in sorted(run_spots) if q < p]
             refs = (engine.reference_stations(spots=run_spots[earlier[0]]) if earlier else
