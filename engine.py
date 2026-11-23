@@ -30,7 +30,7 @@ from xlsx_patch import XlsxPatcher, column_letters
 
 # Bump whenever parsing or the Workbook/ParsedFile shape changes: the app passes it into
 # its cached loaders so Streamlit never serves objects built by older code.
-ENGINE_VERSION = 24
+ENGINE_VERSION = 25
 
 CONSISTENCY_SHEET = "Robotic Raw Data Input"
 MOVEMENT_SHEET = "Robotic Raw Data Average Input"
@@ -160,6 +160,7 @@ def parse_trimble_csv(data: bytes) -> ParsedFile:
     """
     text = data.decode("utf-8-sig", errors="replace")
     errors, warnings, shots, control, null_points, skipped = [], [], [], [], [], []
+    null_elev = []
     units, job = None, ""
     for row in csv.reader(io.StringIO(text)):
         row = [c.strip() for c in row]
@@ -177,7 +178,10 @@ def parse_trimble_csv(data: bytes) -> ParsedFile:
         if None in coords and len(row) >= 6:
             coords = [_float(c) for c in row[3:6]]
         if any(str(c).strip() == "?" for c in row[1:4]):
-            null_points.append(name)
+            if all(str(c).strip() != "?" for c in row[1:3]):
+                null_elev.append(name)          # position computed, elevation not
+            else:
+                null_points.append(name)
             continue
         if SKIP_RE.search(name):
             skipped.append(f"{name} (marked as not to use)")
@@ -202,6 +206,22 @@ def parse_trimble_csv(data: bytes) -> ParsedFile:
         warnings.append("No 'Units:' header line found - assuming US Survey Feet.")
     if skipped:
         warnings.append("Left out: " + "; ".join(skipped) + ".")
+    def _list(names):
+        return ", ".join(names[:6]) + ("..." if len(names) > 6 else "")
+    if null_elev:
+        bm = [c for c in control if re.search(r"BENCH|\bBM", c[0], re.I)]
+        bm_ok = bool(bm) and all(abs(v) < 0.0005 for v in bm[0][1:4])
+        warnings.append(
+            f"FLAG: {len(null_elev)} shot(s) have a position but no elevation ('?' in the export) "
+            f"and were left out: {_list(null_elev)}. "
+            + ("The benchmark is already 0, 0, 0, so that isn't the cause. "
+               if bm_ok else
+               "First check the benchmark: its coordinates must be 0, 0, 0 (N, E, elevation) - "
+               "a benchmark without an elevation leaves every shot without one. ")
+            + "When only some shots lose elevation, the target height on those shots is blank. "
+            "In Trimble Access open Review job, find those shots, set the target height "
+            "(Bottom mount, or True height 1.73' with the extension) and export again. "
+            "Check their positions too - if they jump around, reshoot them.")
     if null_points and shots:
         warnings.append(f"Left out {len(null_points)} shot(s) with no coordinates ('?' in the "
                         f"export): {', '.join(null_points[:6])}{'...' if len(null_points) > 6 else ''}. "
@@ -210,11 +230,11 @@ def parse_trimble_csv(data: bytes) -> ParsedFile:
     if null_points:
         errors.append(
             f"{len(null_points)} point(s) have no coordinates ('?' in the export), starting with "
-            f"'{null_points[0]}'. Trimble couldn't compute them: the station setup has no "
-            "backsight azimuth, so nothing measured from it has a position. In Trimble Access, "
-            "open Review job, find that station setup's backsight azimuth record, enter the "
-            "azimuth (0), then export again - the angles and distances are still stored and "
-            "every point recomputes.")
+            f"'{null_points[0]}'. Trimble couldn't compute them because the station setup lost "
+            "its reference. In Trimble Access open Review job and check the station setup: the "
+            "benchmark must be 0, 0, 0 (N, E, elevation) and the backsight azimuth must be "
+            "entered (0, or 90 on old digs). Fix whichever is missing and export again - the "
+            "angles and distances are still stored and every point recomputes.")
     if not shots and not null_points:
         errors.append("No pipe shots found in the CSV.")
     return ParsedFile(shots, control, units, errors, warnings, job)
