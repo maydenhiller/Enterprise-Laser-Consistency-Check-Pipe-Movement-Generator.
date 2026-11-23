@@ -165,6 +165,7 @@ if bm_dates:
                + ", ".join(engine.date_text(d) for d in bm_dates))
 
 results = {}
+run_spots = {}          # spots of profiles already named in this run, for matching later ones
 tabs = st.tabs([f"Profile {p}" for p in profiles])
 for p, tab in zip(profiles, tabs):
     with tab:
@@ -188,24 +189,48 @@ for p, tab in zip(profiles, tabs):
         # Two ways to name stations: the field labels (with obvious typos fixed), or the
         # measured position when the labels are off in a pattern. Position is picked
         # automatically when the labels can't produce a clean result.
+        keep_odd = st.checkbox(
+            "Keep shots with an elevation far off the others at their station",
+            key=f"keep_odd_{p}",
+            help="Off: a shot more than 0.25 ft off the other shot(s) at its station "
+                 "(usually a wrong target height) is left out. On: every shot is averaged in.")
         label_build = engine.build_profile(parsed.shots, final, p)
         order = None
-        modes = ["Field labels (typos fixed)", "Measured position"]
-        mode = st.radio("Name stations by", modes, horizontal=True, key=f"mode_{p}",
-                        index=1 if label_build.errors else 0,
-                        help="Measured position names every station by its distance from "
-                             "the weld, from the robot's coordinates.")
-        if mode == modes[1]:
-            if label_build.errors:
-                st.warning("The field labels don't match where the shots were taken (for "
-                           "example two spots 3 ft apart with the same label), so stations are "
-                           "named by measured position. Check the table below.")
+        modes = ["Measured position", "Field labels (typos fixed)"]
+        mode = st.radio("Name stations by", modes, horizontal=True, key=f"mode_{p}", index=0,
+                        help="Measured position: each station is named by where the robot "
+                             "measured it, counting marks from the weld. Field labels: the "
+                             "names the crew typed, with obvious typos fixed.")
+        if mode == modes[0]:
+            suggested, agree = engine.suggest_shift(parsed.shots, p)
             shift = st.number_input(
                 "Weld offset (ft): how far downstream of the shots labeled 'GW' the weld "
-                "really is", value=0.0, step=0.5, format="%.2f", key=f"shift_{p}",
-                help="0 if the GW shots were taken on the weld. If they were taken one mark "
-                     "upstream of it, enter the mark spacing.")
-            spots, gw_number, layout_notes = engine.position_layout(parsed.shots, p, shift)
+                "really is", value=float(suggested), step=0.5, format="%.2f",
+                key=f"shift_{p}_{suggested}",
+                help="0 if the GW shots were taken on the weld. Set automatically when most "
+                     "field labels sit a whole mark off the measured positions.")
+            if suggested:
+                st.warning(f"Most field labels sit {suggested:.2f} ft off the measured "
+                           "positions, so the weld offset was set to that: the shots labeled "
+                           "'GW' look like they were taken one mark away from the weld. Set it "
+                           "to 0 if they really were on the weld.")
+            spots, gw_number, layout_notes = engine.position_layout(parsed.shots, p, shift, keep_odd)
+            earlier = [q for q in sorted(run_spots) if q < p]
+            refs = (engine.reference_stations(spots=run_spots[earlier[0]]) if earlier else
+                    engine.reference_stations(book=mv) if p > 0 and mv is not None and any(
+                        engine.movement_has_profile(mv, q) for q in range(p)) else [])
+            if p > 0 and refs:
+                matched = engine.snap_to_stations(spots, refs)
+                st.caption(f"{matched} of {len(spots)} stations matched to Profile "
+                           f"{earlier[0] if earlier else 0}'s stations by position.")
+            elif not label_build.errors:
+                same = sum(1 for sp in spots for x in sp.used
+                           if x.station and x.station == sp.name)
+                total = sum(1 for sp in spots for x in sp.used if x.station)
+                if total and same / total < 0.5:
+                    st.warning(f"Only {same} of {total} field labels match the measured "
+                               "names. Check the weld offset, or switch to Field labels.")
+            run_spots[p] = spots
             for n in layout_notes:
                 st.caption(n)
             final = engine.position_names(spots)
@@ -213,15 +238,20 @@ for p, tab in zip(profiles, tabs):
             st.dataframe(pd.DataFrame([{
                 "Distance from weld (ft)": round(sp.along, 2),
                 "Station": sp.name,
-                "Shots used": ", ".join(f"{x.counter:04d}" for x in sp.used),
+                "Shots used": ", ".join(engine.shot_number(x) for x in sp.used),
                 "Field labels": ", ".join(sorted({x.raw_name.rsplit(" ", 1)[0]
                                                   for x in sp.used + [d for d, _ in sp.dropped]})),
-                "Left out": "; ".join(f"{x.counter:04d} ({why})" for x, why in sp.dropped),
+                "Left out": "; ".join(f"{engine.shot_number(x)} ({why})" for x, why in sp.dropped),
             } for sp in spots]), hide_index=True, width="stretch")
             fix_rows = [{"#": s.index + 1, "Raw name": s.raw_name,
                          "Used as": final.get(s.index) or "(left out)"}
-                        for s in shots if final.get(s.index) != s.raw_name]
-            renamed = True
+                        for s in shots
+                        if (final.get(s.index) or "").lower() != s.suggestion.lower()]
+            renamed = bool(fix_rows)
+            if fix_rows:
+                with st.expander(f"Shots named differently from their field label - "
+                                 f"{len(fix_rows)}", expanded=False):
+                    st.dataframe(pd.DataFrame(fix_rows), hide_index=True, width="stretch")
         else:
             renamed = False
             fix_rows = [{"#": s.index + 1, "Raw name": s.raw_name, "Used as": s.suggestion,
@@ -241,11 +271,6 @@ for p, tab in zip(profiles, tabs):
                 else:
                     st.write("All shot names read cleanly.")
 
-        keep_odd = st.checkbox(
-            "Keep shots with an elevation far off the others at their station",
-            key=f"keep_odd_{p}",
-            help="Off: a shot more than 0.25 ft off the other shot(s) at its station "
-                 "(usually a wrong target height) is left out. On: every shot is averaged in.")
         build = engine.build_profile(parsed.shots, final, p, order, keep_odd)
         for note in engine.cross_file_check(parsed.shots, final, p):
             (st.warning if "won't" in note else st.caption)(note)
@@ -414,8 +439,8 @@ for p in profiles:
         notes.append(("error", f"Profile {p}: couldn't write the workbooks: {exc}"))
         continue
     if r.get("by_position"):
-        notes.append(("warning", f"Profile {p}: stations named by measured position, not the "
-                                 "field labels - check the station table on its tab."))
+        notes.append(("info", f"Profile {p}: {r['fixed']} shot(s) named by where they were "
+                              "measured rather than their field label (listed on its tab)."))
     elif r["fixed"]:
         notes.append(("info", f"Profile {p}: {r['fixed']} shot name(s) auto-corrected "
                               "(see Shot names on its tab)."))

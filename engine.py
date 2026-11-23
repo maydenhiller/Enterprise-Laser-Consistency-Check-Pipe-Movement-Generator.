@@ -30,7 +30,7 @@ from xlsx_patch import XlsxPatcher, column_letters
 
 # Bump whenever parsing or the Workbook/ParsedFile shape changes: the app passes it into
 # its cached loaders so Streamlit never serves objects built by older code.
-ENGINE_VERSION = 15
+ENGINE_VERSION = 18
 
 CONSISTENCY_SHEET = "Robotic Raw Data Input"
 MOVEMENT_SHEET = "Robotic Raw Data Average Input"
@@ -769,7 +769,7 @@ class Spot:
     dropped: list = field(default_factory=list)   # (shot, reason)
 
 
-def position_layout(shots: list, profile: int, shift: float = 0.0):
+def position_layout(shots: list, profile: int, shift: float = 0.0, keep_odd: bool = False):
     """Group a profile's shots by where they were taken and name each spot by its measured
     distance from the weld. The weld is the spot most shots labeled 'GW' (no footage) sit
     on, moved ``shift`` ft downstream if the GW shots weren't on the weld. Downstream is the
@@ -814,19 +814,35 @@ def position_layout(shots: list, profile: int, shift: float = 0.0):
                  for k, v in spots.items() for x in v if x.side == "D")
     sign = 1 if d_side >= 0 else -1
 
+    # Name spots by counting marks from the weld rather than rounding raw distance: the
+    # chord along the pipe runs a little shorter than a tape laid on it, so on a long dig
+    # with 1 ft marks raw rounding drifts to the wrong foot. A spot that isn't on the mark
+    # grid (an odd end mark) keeps its own rounded footage.
+    raw = {k: sign * (along(k) - along(origin)) for k in spots}
+    ordered = sorted(raw.values())
+    steps = [b - a for a, b in zip(ordered, ordered[1:]) if b - a > 0.2]
+    spacing = median(steps) if steps else 1.0
+    nominal = max(1, round(spacing)) if spacing >= 0.75 else round(spacing * 4) / 4
+    weld_label = Counter(x.station for x in spots[origin]
+                         if x.station and x.dist is None and x.gw == gw_number)
+    weld_name = weld_label.most_common(1)[0][0] if weld_label else f"GW {gw_number}"
     out = []
     for k, members in spots.items():
-        pos = sign * (along(k) - along(origin)) - shift
-        feet = round(pos)
-        if abs(pos) < 0.5:
-            name = f"GW {gw_number}"
+        pos = raw[k] - shift
+        index = round(pos / spacing)
+        on_grid = abs(pos - index * spacing) <= 0.25 * spacing
+        feet = index * nominal if on_grid else round(pos)
+        if feet == 0 and on_grid:
+            name = weld_name
         else:
-            name = f"{abs(feet)}' {'D' if pos > 0 else 'U'}/S GW {gw_number}"
+            feet = abs(feet)
+            feet = int(feet) if float(feet).is_integer() else feet
+            name = f"{feet}' {'D' if pos > 0 else 'U'}/S GW {gw_number}"
         spot = Spot(pos, sorted(members, key=lambda x: x.counter or 9999), name)
         zs = sorted(x.z for x in members)
         mid = zs[len(zs) // 2]
         for x in spot.shots:
-            if len(members) > 1 and abs(x.z - mid) > 0.25:
+            if len(members) > 1 and abs(x.z - mid) > 0.25 and not keep_odd:
                 spot.dropped.append((x, f"elevation {x.z - mid:+.2f} ft off the other shots "
                                         "here - wrong target height?"))
             else:
@@ -836,7 +852,7 @@ def position_layout(shots: list, profile: int, shift: float = 0.0):
             spot.dropped.append((extra, "more than 3 shots at this spot"))
         out.append(spot)
     out.sort(key=lambda sp: sp.along)
-    if not any(sp.name.startswith("GW") for sp in out):
+    if not any("'" not in sp.name for sp in out):
         notes.append("No shot sits on the weld itself, so there is no GW station.")
     gaps = [f"{(p.along + q.along) / 2:.1f}" for p, q in zip(out, out[1:])
             if q.along - p.along > 1.5 * median([y.along - x.along for x, y in zip(out, out[1:])])]
@@ -851,7 +867,8 @@ def position_names(spots: list) -> dict:
     names = {}
     for sp in spots:
         for x in sp.used:
-            names[x.index] = f"{sp.name} {x.counter:04d}"
+            number = x.counter if x.counter is not None else x.guess_counter
+            names[x.index] = f"{sp.name} {number:04d}" if number is not None else None
         for x, _ in sp.dropped:
             names[x.index] = None
     return names
@@ -871,7 +888,8 @@ def label_mismatch_share(spots: list) -> float:
 def pipe_order(spots: list) -> list:
     """Spot names along the pipe, starting from the end the first shot was taken at."""
     names = [sp.name for sp in spots if sp.used]
-    first = min((sp for sp in spots if sp.used), key=lambda sp: min(x.counter for x in sp.used))
+    first = min((sp for sp in spots if sp.used),
+                key=lambda sp: min((x.counter if x.counter is not None else x.guess_counter or 9999) for x in sp.used))
     if abs(first.along - spots[-1].along) < abs(first.along - spots[0].along):
         names.reverse()
     return names
@@ -979,3 +997,71 @@ def cross_file_check(shots: list, names: dict, profile: int) -> list:
                 "benchmark, backsight or azimuth) - the profile won't be right until they match."]
     return [f"Profile {profile} combines {len(sources)} CSVs; stations shot in both agree within "
             f"{worst[1] * 12:.2f} in, so they share a coordinate frame."]
+
+
+
+def suggest_shift(shots: list, profile: int):
+    """(weld offset in ft, share of field labels that agree) - the whole-mark offset that
+    makes the most field footage labels match the measured positions. Catches 'GW' shots
+    taken on the mark next to the weld (dig 19A)."""
+    spots, _, _ = position_layout(shots, profile, 0.0)
+    if len(spots) < 3:
+        return 0.0, 1.0
+    alongs = sorted(sp.along for sp in spots)
+    spacing = median([b - a for a, b in zip(alongs, alongs[1:]) if b - a > 0.2] or [1.0])
+    residuals = []
+    for sp in spots:
+        for x in sp.used:
+            if x.side and (x.dist is not None):
+                residuals.append(sp.along - (x.dist if x.side == "D" else -x.dist))
+            elif x.station and x.dist is None and x.gw:
+                residuals.append(sp.along)
+    if not residuals:
+        return 0.0, 1.0
+    def agree(k):
+        return sum(abs(r - k * spacing) <= 0.4 * spacing for r in residuals) / len(residuals)
+    best = max(range(-3, 4), key=lambda k: (agree(k), -abs(k)))
+    if best != 0 and agree(best) > agree(0) and agree(best) >= 0.5:
+        return round(best * spacing, 2), agree(best)
+    return 0.0, agree(0)
+
+
+def reference_stations(book: Optional[Workbook] = None, spots: Optional[list] = None) -> list:
+    """[(station name, N, E)] to match later profiles against: Profile 0 averages from a
+    Pipe Movement file, or the spots of a profile processed earlier in the same run."""
+    if spots:
+        out = []
+        for sp in spots:
+            pts = sp.used or [d for d, _ in sp.dropped]
+            out.append((sp.name, sum(x.n for x in pts) / len(pts), sum(x.e for x in pts) / len(pts)))
+        return out
+    if book is None:
+        return []
+    return [(str(r[0]).strip(), r[4], r[5]) for r in book.rows
+            if r[0] and isinstance(r[4], (int, float)) and isinstance(r[5], (int, float))]
+
+
+def snap_to_stations(spots: list, rows: list) -> int:
+    """Give each spot the station name an earlier profile used at the same place, so rows
+    line up in the Pipe Movement file. Returns how many spots were matched."""
+    if not rows or len(spots) < 2:
+        return 0
+    alongs = sorted(sp.along for sp in spots)
+    spacing = median([b - a for a, b in zip(alongs, alongs[1:]) if b - a > 0.2] or [1.0])
+    matched = 0
+    for sp in spots:
+        pts = sp.used or [d for d, _ in sp.dropped]
+        n = sum(x.n for x in pts) / len(pts)
+        e = sum(x.e for x in pts) / len(pts)
+        best = min(rows, key=lambda r: min(math.hypot(n - r[1], e - r[2]),
+                                           math.hypot(n - r[1], -e - r[2])))
+        d = min(math.hypot(n - best[1], e - best[2]), math.hypot(n - best[1], -e - best[2]))
+        if d <= 0.4 * spacing:
+            sp.name = best[0]
+            matched += 1
+    return matched
+
+
+def shot_number(x) -> str:
+    n = x.counter if x.counter is not None else x.guess_counter
+    return f"{n:04d}" if n is not None else "?"

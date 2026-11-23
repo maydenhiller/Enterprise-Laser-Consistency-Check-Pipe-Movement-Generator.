@@ -29,10 +29,16 @@ This app fills the measurement area, Exposed Length when it's blank, and Technic
    'no BS' in Other notes leaves a station out of the bending strain. Blank thickness warns
    and is treated as 0. Both shots at a station share one entry (the workbook copies #1's
    notes and thickness to #2 and #3).
-4. **Shot names are corrected automatically**: shots at the same spot of pipe are grouped by
-   coordinates and a bad name takes the name of the other shot there (missing shot number,
-   GW typo, a label that wasn't changed, `''`). Every fix is listed on the profile tab and can
-   be overridden.
+4. **Station names (default: Measured position).** Each station is named by where the robot
+   measured it: shots at the same spot are grouped by coordinates, and the app counts marks
+   from the weld (the spot the shots labeled "GW" sit on) at the detected spacing, so a long
+   dig with 1 ft marks doesn't drift. The weld station keeps the crew's own name
+   ("D/S GW 181000"). If most field labels sit a whole mark off the measured positions (GW
+   shots taken on the mark next to the weld), the weld offset is set to that automatically
+   and the app says so. Profile 1+ reuse Profile 0's station names by position, from the
+   uploaded Pipe Movement file or from Profile 0 in the same run, so rows always line up.
+   "Field labels (typos fixed)" is still available: it keeps the typed names and only fixes
+   names that disagree with the other shots at the same spot.
 5. **Consistency**: per-station 3D difference between measurements against Enterprise's
    0.20" limit, a chart, and an on-site preview of max deflection and fitted strain. Failures
    warn; they don't block the download.
