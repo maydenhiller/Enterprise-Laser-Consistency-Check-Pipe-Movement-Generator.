@@ -30,7 +30,7 @@ from xlsx_patch import XlsxPatcher, column_letters
 
 # Bump whenever parsing or the Workbook/ParsedFile shape changes: the app passes it into
 # its cached loaders so Streamlit never serves objects built by older code.
-ENGINE_VERSION = 14
+ENGINE_VERSION = 15
 
 CONSISTENCY_SHEET = "Robotic Raw Data Input"
 MOVEMENT_SHEET = "Robotic Raw Data Average Input"
@@ -406,7 +406,7 @@ def build_profile(shots: list, final_names: dict, profile: int,
     # Order by shot number, not by position in the file: a station skipped and shot later
     # (with its reserved number) must still land in its place along the pipe.
     for members in groups.values():
-        members.sort(key=lambda x: x.counter)
+        members.sort(key=lambda x: (x.source, x.counter))
     groups = dict(sorted(groups.items(), key=lambda kv: kv[1][0].counter))
     if len(groups) >= 3 and not order:
         # Pipe order by position: project each station onto the line between the two
@@ -449,10 +449,20 @@ def build_profile(shots: list, final_names: dict, profile: int,
     for st in stations:
         if len(st.shots) == 1:
             warnings.append(f"{st.station_id}: only one measurement - Enterprise requires two.")
+        spread = max(math.dist(a.xyz, b.xyz) for a in st.shots for b in st.shots)
+        if len(st.shots) > 3 and spread <= 0.5:
+            # More than the workbook's 3 (e.g. two crews overlapping): keep the 3 that agree
+            # best with each other and say which were left out.
+            centre = [sorted(c)[len(c) // 2] for c in zip(*[x.xyz for x in st.shots])]
+            keep = sorted(st.shots, key=lambda x: math.dist(x.xyz, centre))[:3]
+            extra = [x for x in st.shots if x not in keep]
+            st.shots = sorted(keep, key=lambda x: (x.source, x.counter))
+            warnings.append(f"{st.station_id}: {len(keep) + len(extra)} shots, the workbook takes 3 - "
+                            "left out " + ", ".join(f"{x.counter:04d}" for x in extra) + ".")
+            continue
         if len(st.shots) > 3:
             errors.append(f"{st.station_id}: {len(st.shots)} shots under one name (max 3). "
                           "Check for a station label that wasn't changed.")
-        spread = max(math.dist(a.xyz, b.xyz) for a in st.shots for b in st.shots)
         if spread > 0.5:
             errors.append(f"{st.station_id}: shots under this name are {spread:.2f} ft apart - "
                           "one of them is mislabeled.")
