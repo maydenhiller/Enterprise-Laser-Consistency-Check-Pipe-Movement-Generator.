@@ -40,10 +40,10 @@ def read_csv(data: bytes, version: int):
 
 
 @st.cache_data(show_spinner=False)
-def load_csvs(blobs: tuple, profiles: tuple, version: int):
+def load_csvs(blobs: tuple, profiles: tuple, align: bool, version: int):
     files = [engine.apply_file_profile(engine.parse_trimble_csv(b), p)
              for b, p in zip(blobs, profiles)]
-    merged = engine.merge_parsed(files)
+    merged = engine.merge_parsed(files, align)
     engine.review_names(merged.shots)
     return merged
 
@@ -90,7 +90,21 @@ for i, f in enumerate(csv_files):
     else:
         pick = FROM_NUMBERS
     file_profiles.append(None if pick == FROM_NUMBERS else pick)
-parsed = load_csvs(tuple(f.getvalue() for f in csv_files), tuple(file_profiles),
+offsets = engine.backsight_offsets([read_csv(f.getvalue(), engine.ENGINE_VERSION)
+                                    for f in csv_files]) if len(csv_files) > 1 else {}
+align = False
+if offsets:
+    for i, dz in offsets.items():
+        st.warning(f"{csv_files[i].name}'s setup sits {dz:+.3f} ft from {csv_files[0].name}'s: "
+                   "both shot the same backsight stake, but its elevation differs by that much. "
+                   "One setup's instrument height or backsight target height was entered "
+                   "differently, so every shot from it is off by the same amount.")
+    align = st.checkbox("Move those files' elevations to match the first file's setup",
+                        value=True, key="align_setups",
+                        help="Shifts every shot in the other file(s) by the backsight "
+                             "difference. The better fix is the instrument/target height on "
+                             "the data collector, then re-export.")
+parsed = load_csvs(tuple(f.getvalue() for f in csv_files), tuple(file_profiles), align,
                    engine.ENGINE_VERSION)
 stop = False
 for e in parsed.errors:

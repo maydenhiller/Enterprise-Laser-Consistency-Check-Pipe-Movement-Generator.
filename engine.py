@@ -30,7 +30,7 @@ from xlsx_patch import XlsxPatcher, column_letters
 
 # Bump whenever parsing or the Workbook/ParsedFile shape changes: the app passes it into
 # its cached loaders so Streamlit never serves objects built by older code.
-ENGINE_VERSION = 20
+ENGINE_VERSION = 22
 
 CONSISTENCY_SHEET = "Robotic Raw Data Input"
 MOVEMENT_SHEET = "Robotic Raw Data Average Input"
@@ -182,7 +182,7 @@ def parse_trimble_csv(data: bytes) -> ParsedFile:
 def control_check(control: list) -> list:
     """Compare repeated benchmark / backsight shots from different setups."""
     notes, by_name = [], {}
-    for name, n, e, z in control:
+    for name, n, e, z, *_ in control:
         key = re.sub(r"\s+", " ", name.upper())
         by_name.setdefault(key, []).append((n, e, z))
     for key, pts in by_name.items():
@@ -712,16 +712,49 @@ def preview(points: list, thickness: list, od_in: Optional[float]) -> dict:
 # ---------------------------------------------------------------------------
 # Several exports at once, and the Y direction
 # ---------------------------------------------------------------------------
-def merge_parsed(files: list) -> ParsedFile:
+def backsight_offsets(files: list) -> dict:
+    """{file number: elevation offset (ft) of that file's setup vs the first file}.
+
+    Every setup puts the benchmark at 0,0,0 and shoots the same backsight stake, so the
+    backsight's stored elevation (the ground at the stake) must match between setups. A
+    difference means one setup's instrument height or backsight target height was entered
+    differently, and every shot from it is off by that much."""
+    def backsights(f):
+        return [(n, e, z) for _, n, e, z in f.control if math.hypot(n, e) > 1]
+    if not files:
+        return {}
+    ref = backsights(files[0])
+    out = {}
+    for i, f in enumerate(files[1:], start=1):
+        best = None
+        for n, e, z in backsights(f):
+            for rn, re_, rz in ref:
+                d = math.hypot(n - rn, e - re_)
+                if d <= 0.25 and (best is None or d < best[0]):
+                    best = (d, z - rz)
+        if best is not None and abs(best[1]) > 0.05:
+            out[i] = best[1]
+    return out
+
+
+def merge_parsed(files: list, align: bool = False) -> ParsedFile:
     """Combine several CSV exports. Jobs are cumulative, so the same shot can be in more
-    than one export; exact repeats (same name and coordinates) are kept once."""
+    than one export; exact repeats (same name and coordinates) are kept once. With
+    ``align``, a file whose setup sits higher or lower than the first file's (by the shared
+    backsight) is shifted to match."""
     shots, control, errors, warnings, seen = [], [], [], [], set()
     units = None
+    offsets = backsight_offsets(files) if align else {}
     for source, f in enumerate(files):
         errors += f.errors
         warnings += f.warnings
         units = units or f.units
-        control += f.control
+        control += [c + (source,) for c in f.control]
+        if source in offsets:
+            for s in f.shots:
+                s.z -= offsets[source]
+            warnings.append(f"File {source + 1}'s elevations were moved {-offsets[source]:+.3f} ft "
+                            "to match file 1's setup (shared backsight).")
         for s in f.shots:
             key = (s.profile_override, s.raw_name.strip(), round(s.n, 4), round(s.e, 4), round(s.z, 4))
             if key in seen:
@@ -810,18 +843,40 @@ def position_layout(shots: list, profile: int, shift: float = 0.0, keep_odd: boo
     notes = []
     if gw_votes:
         origin = gw_votes.most_common(1)[0][0]
+        d_side = sum(1 if along(k) > along(origin) else -1
+                     for k, v in spots.items() for x in v if x.side == "D")
+        sign = 1 if d_side >= 0 else -1
+        weld_at = along(origin)
     else:
-        origin = min(keys, key=lambda k: min(x.counter or 9999 for x in spots[k]))
-        notes.append("No shot is labeled as the weld; measuring from the first spot shot.")
-    d_side = sum(1 if along(k) > along(origin) else -1
-                 for k, v in spots.items() for x in v if x.side == "D")
-    sign = 1 if d_side >= 0 else -1
+        # No shot on the weld (it wasn't shot): place the weld from the crew's footage
+        # labels. Every labeled shot says "I'm d ft U/S or D/S of the weld"; the direction
+        # and weld position that make those agree best win.
+        labeled = [(along(k), x.dist if x.side == "D" else -x.dist)
+                   for k, v in spots.items() for x in v if x.side and x.dist is not None]
+        if labeled:
+            best = None
+            for sg in (1, -1):
+                guesses = sorted(sg * a - lab for a, lab in labeled)
+                mid = guesses[len(guesses) // 2]
+                spread = sorted(abs(g - mid) for g in guesses)[len(guesses) // 2]
+                if best is None or spread < best[0]:
+                    best = (spread, sg, mid)
+            _, sign, weld_pos = best
+            weld_at = sign * weld_pos
+            notes.append("No shot was taken on the weld; its position comes from the crew's "
+                         "footage labels.")
+        else:
+            origin = min(keys, key=lambda k: min(x.counter or 9999 for x in spots[k]))
+            sign, weld_at = 1, along(origin)
+            notes.append("No shot is labeled with footage or as the weld; measuring from "
+                         "the first spot shot.")
+        origin = min(keys, key=lambda k: abs(along(k) - weld_at))
 
     # Name spots by counting marks from the weld rather than rounding raw distance: the
     # chord along the pipe runs a little shorter than a tape laid on it, so on a long dig
     # with 1 ft marks raw rounding drifts to the wrong foot. A spot that isn't on the mark
     # grid (an odd end mark) keeps its own rounded footage.
-    raw = {k: sign * (along(k) - along(origin)) for k in spots}
+    raw = {k: sign * (along(k) - weld_at) for k in spots}
     ordered = sorted(raw.values())
     steps = [b - a for a, b in zip(ordered, ordered[1:]) if b - a > 0.2]
     spacing = median(steps) if steps else 1.0
