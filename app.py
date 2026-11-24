@@ -28,7 +28,7 @@ st.caption("One dig per run. Best run on site after each profile, so a 3rd round
 # Pipe surface choices, matching the As-Built builder's lists.
 EXISTING = ["Polyken Tape", "Coal Tar", "RD6 Transition Tape"]
 REPAIR = ["PROTAL-7200", "DENSO 7200", "SPC 4888", "SPC 2831", "Aquawrap"]
-SLEEVES = ["Petro Sleeve", "B Sleeve", "Overlay", "Metal Band"]
+SLEEVES = ["Petro Sleeve", "B Sleeve", "Overlay", "Metal Band", "RD6 with Metal Band"]
 SURFACES = ["Bare pipe"] + EXISTING + REPAIR + SLEEVES + ["Other"]
 DEFAULT_SURFACE = {0: "Polyken Tape", 1: "Bare pipe", 2: "PROTAL-7200", 3: "PROTAL-7200"}
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
